@@ -57,7 +57,8 @@ recreate.
 - **Pull a new image:** `docker compose pull && docker compose up -d`.
 - **Bump ComfyUI core:** CI opens a weekly PR bumping `ARG COMFYUI_REF`/`COMFYUI_VERSION` to the
   latest release; merging rebuilds and republishes `latest` + pinned tags. To pin a specific
-  version yourself, build with `--build-arg COMFYUI_REF=v0.8.2`.
+  version yourself, build with `--target base --build-arg COMFYUI_REF=v0.8.2`. The `-sage` image
+  is built with `docker build --target sage .`.
 
 ## Installing the video/audio node packs
 
