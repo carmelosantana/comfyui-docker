@@ -1,0 +1,6 @@
+# ComfyUI node packs the image supports installing cleanly.
+# Format: <git-url> [<git-ref>]   (ref optional; blank = default branch)
+https://github.com/kijai/ComfyUI-WanVideoWrapper
+https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite
+https://github.com/diodiogod/TTS-Audio-Suite
+https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader
