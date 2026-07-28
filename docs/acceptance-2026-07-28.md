@@ -8,7 +8,48 @@ ComfyUI-Manager reports v4+, and the two v3.x failures are gone:
 
 Host has **no NVIDIA container runtime**; container run CPU-only (`--cpu` forwarded via `"$@"`).
 
-## Verdict
+## Verdict — SUPERSEDED: now PASSING as-built (fix applied)
+
+**PASS (as-built image).** Both previously-failing calls return **HTTP 200** against the shipped
+`comfyui-test` image on `:8188`, CPU-only, with no code-level diagnostic workaround.
+
+> The earlier BLOCKED state (recorded below for history) was caused by the image never activating
+> Manager v4. It was fixed by three coordinated changes: (1) `pip install /opt/comfyui-manager` in
+> the Dockerfile so `import comfyui_manager` resolves; (2) adding `--enable-manager` to both
+> `main.py` exec branches in `source/entrypoint.sh`; (3) replacing the harmful v3 `link_manager`
+> symlink with `remove_stale_manager` (purges any stale v3 ComfyUI-Manager from the custom_nodes
+> mount, creates no symlink). A follow-on permission fix recursively chowns the Manager v4 state
+> dir `user/__manager` to the runtime user so it can create its `snapshots/`/`cache/` subdirs.
+
+### As-built passing evidence (2026-07-28, post-fix)
+
+- Build final line: `#19 naming to docker.io/library/comfyui-test:latest done`
+- `pip show comfyui_manager` in-container: `Name: comfyui-manager` / `Version: 4.0.5`
+- Launch flag confirmed via `main.py --help`: **`--enable-manager`** ("Enable the ComfyUI-Manager feature.")
+- Boot process cmdline: `... python main.py --port 8188 --listen 0.0.0.0 --disable-auto-launch --enable-manager --cpu`
+- Manager liveness: `GET /v2/manager/queue/status` → **HTTP 200** (routes registered; no `IMPORT FAILED`).
+- Log: `[START] ComfyUI-Manager`, `config path: /opt/comfyui/user/__manager/config.ini`, `network_mode: public`.
+
+```
+node-install    POST /v2/manager/queue/task           -> HTTP 200   (405 gating GONE)
+model-download  POST /v2/manager/queue/install_model  -> HTTP 200   (500 "REQUIRES Manager v4+" GONE)
+```
+
+Worker log showed `[START] Security scan` / `[DONE] Security scan` and **no** "REQUIRE Manager v4+"
+or arbitrary-URL rejection. `user/__manager/config.ini` confirmed `security_level = weak` /
+`network_mode = public` in effect.
+
+Unit suites: `test_entrypoint.sh` **24/0**, `test_bootstrap_nodes.sh` **4/0**,
+`test_cleanup_legacy.sh` **10/0**.
+
+---
+
+## Historical (blocked) evidence
+
+_The section below is the original BLOCKED run, kept for provenance. It has been superseded by the
+passing result above._
+
+### Verdict (original)
 
 **BLOCKED (as-built image) — with a diagnostic proof that the Manager v4 code itself is correct.**
 

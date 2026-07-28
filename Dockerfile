@@ -34,6 +34,11 @@ RUN pip install \
     --requirement /opt/comfyui/requirements.txt \
     --requirement /opt/comfyui-manager/requirements.txt
 
+# Install the ComfyUI-Manager v4 package itself so `import comfyui_manager` resolves and
+# `main.py --enable-manager` can activate it via its native hook. The clone above stays as the
+# version pin and MANAGER_SRC referenced by the entrypoint.
+RUN pip install /opt/comfyui-manager
+
 # Default Manager config, seeded by the entrypoint only when the user has none.
 COPY source/manager-config.ini /opt/comfyui-manager-config.ini
 

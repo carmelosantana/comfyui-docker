@@ -8,27 +8,31 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-# Case A: a real stale ComfyUI-Manager dir is backed up and replaced by a symlink.
+# Manager v4 is a pip-installed package activated by --enable-manager, NOT a v3 symlink into
+# custom_nodes (ComfyUI rejects that path as IMPORT FAILED). remove_stale_manager must therefore
+# purge any stale v3 ComfyUI-Manager from the custom_nodes mount and create NO symlink.
+
+# Case A: a real stale ComfyUI-Manager dir is backed up to .bak; NO symlink is created.
 MANAGER_SRC="$workdir/baked-manager"; mkdir -p "$MANAGER_SRC"; echo v4 > "$MANAGER_SRC/marker"
 CUSTOM_NODES_DIR="$workdir/custom_nodes"; mkdir -p "$CUSTOM_NODES_DIR/ComfyUI-Manager"
 echo v3 > "$CUSTOM_NODES_DIR/ComfyUI-Manager/legacy"
-link_manager
-assert_true '[ -L "$CUSTOM_NODES_DIR/ComfyUI-Manager" ]' "stale dir replaced by a symlink"
-assert_eq "$MANAGER_SRC" "$(readlink "$CUSTOM_NODES_DIR/ComfyUI-Manager")" "symlink points at baked manager"
+remove_stale_manager
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Manager" ]' "stale dir removed from custom_nodes"
+assert_true '[ ! -L "$CUSTOM_NODES_DIR/ComfyUI-Manager" ]' "no symlink pointing at baked manager created"
 assert_true '[ -f "$CUSTOM_NODES_DIR/ComfyUI-Manager.bak/legacy" ]' "old 3.x dir preserved in .bak"
 
-# Case B: an existing symlink is refreshed (not backed up).
+# Case B: an existing (v3) symlink is removed, not recreated, and no .bak is made.
 rm -rf "$workdir/custom_nodes"; CUSTOM_NODES_DIR="$workdir/custom_nodes"; mkdir -p "$CUSTOM_NODES_DIR"
 ln -s /some/old/path "$CUSTOM_NODES_DIR/ComfyUI-Manager"
-link_manager
-assert_eq "$MANAGER_SRC" "$(readlink "$CUSTOM_NODES_DIR/ComfyUI-Manager")" "existing symlink refreshed to baked manager"
+remove_stale_manager
+assert_true '[ ! -L "$CUSTOM_NODES_DIR/ComfyUI-Manager" ]' "existing symlink removed"
 assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Manager.bak" ]' "no .bak created for a symlink"
 
 # Case C: stale dir when a .bak already exists → stale copy dropped, existing .bak untouched.
 rm -rf "$workdir/custom_nodes"; CUSTOM_NODES_DIR="$workdir/custom_nodes"; mkdir -p "$CUSTOM_NODES_DIR/ComfyUI-Manager"
 mkdir -p "$CUSTOM_NODES_DIR/ComfyUI-Manager.bak"; echo keep > "$CUSTOM_NODES_DIR/ComfyUI-Manager.bak/keep"
-link_manager
-assert_true '[ -L "$CUSTOM_NODES_DIR/ComfyUI-Manager" ]' "stale dir replaced even when .bak exists"
+remove_stale_manager
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Manager" ]' "stale dir dropped even when .bak exists"
 assert_true '[ -f "$CUSTOM_NODES_DIR/ComfyUI-Manager.bak/keep" ]' "pre-existing .bak left intact"
 
 # --- Task 4: dirs_to_chown excludes the big bind mounts ---

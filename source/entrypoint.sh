@@ -21,9 +21,11 @@ create_model_dirs() {
     done
 }
 
-# Ensure custom_nodes/ComfyUI-Manager is a symlink to the baked (v4+) manager.
-# A stale real directory from a legacy git-clone would otherwise shadow it.
-link_manager() {
+# Manager v4 is a pip-installed package activated by `--enable-manager`; it is NOT loaded as a
+# custom_nodes entry. A stale v3-era ComfyUI-Manager in the custom_nodes mount (a git-clone dir
+# or the old symlink) must be removed so ComfyUI does not try to import it and log IMPORT FAILED.
+# We deliberately create NO symlink: the pip package + --enable-manager provide the Manager.
+remove_stale_manager() {
     local target="$CUSTOM_NODES_DIR/ComfyUI-Manager"
     if [ -L "$target" ]; then
         rm -f "$target"
@@ -34,7 +36,6 @@ link_manager() {
             rm -rf "$target"
         fi
     fi
-    ln -s "$MANAGER_SRC" "$target"
 }
 
 # Bind mounts that arrive host-owned and must NOT be recursively chowned every boot.
@@ -66,6 +67,11 @@ chown_app_dirs() {
     for ex in "${CHOWN_EXCLUDE[@]}"; do
         [ -e "$COMFYUI_DIR/$ex" ] && chown "$uid:$gid" "$COMFYUI_DIR/$ex" 2>/dev/null || true
     done
+    # The Manager v4 state dir lives under the (otherwise-excluded) user mount and is created by
+    # seed_manager_config as root; the runtime user must own it recursively so Manager can create
+    # its snapshots/startup-scripts/cache/batch_history subdirs on start. It is small and ours.
+    [ -e "$COMFYUI_DIR/user/__manager" ] && \
+        chown --recursive "$uid:$gid" "$COMFYUI_DIR/user/__manager" 2>/dev/null || true
     # Shallow chown of the app root and its top-level files (not the mounts within).
     chown "$uid:$gid" "$COMFYUI_DIR" 2>/dev/null || true
     find "$COMFYUI_DIR" -maxdepth 1 -type f -exec chown "$uid:$gid" {} + 2>/dev/null || true
@@ -148,8 +154,8 @@ seed_manager_config() {
 main() {
     echo "Creating model directories..."
     create_model_dirs
-    echo "Linking ComfyUI Manager..."
-    link_manager
+    echo "Removing any stale v3 ComfyUI Manager from custom_nodes..."
+    remove_stale_manager
     echo "Seeding Manager config (if absent)..."
     seed_manager_config
     echo "Bootstrapping node packs (if opted in)..."
@@ -160,7 +166,7 @@ main() {
     if [ -z "${USER_ID:-}" ] || [ -z "${GROUP_ID:-}" ]; then
         echo "Running container as $(id -un)..."
         exec /opt/conda/bin/python main.py \
-            --port 8188 --listen 0.0.0.0 --disable-auto-launch "$@"
+            --port 8188 --listen 0.0.0.0 --disable-auto-launch --enable-manager "$@"
     fi
 
     echo "Setting up non-root user ${USER_ID}:${GROUP_ID}..."
@@ -172,7 +178,7 @@ main() {
     echo "Running container as comfyui-user (${USER_ID}:${GROUP_ID})..."
     exec sudo --set-home --preserve-env=PATH --user "#${USER_ID}" \
         /opt/conda/bin/python main.py \
-            --port 8188 --listen 0.0.0.0 --disable-auto-launch "$@"
+            --port 8188 --listen 0.0.0.0 --disable-auto-launch --enable-manager "$@"
 }
 
 # Only run when executed directly, not when sourced by tests.
