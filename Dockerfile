@@ -92,6 +92,12 @@ ENV TORCH_CUDA_ARCH_LIST=${SAGE_CUDA_ARCH} \
     MAX_JOBS=4 \
     EXT_PARALLEL=4 \
     NVCC_APPEND_FLAGS="--threads 8"
+# SageAttention v2.2.0 pins its build backend in pyproject (setuptools<75, wheel<0.44,
+# packaging<24). The -devel conda env ships newer ones, and `build --no-isolation` enforces
+# those pins (it fails with "Missing dependencies" before compiling). Install matching versions
+# so the check passes — we must keep --no-isolation because the build imports the image's torch
+# to detect CUDA, which an isolated build env would not have.
+RUN pip install --no-cache-dir "setuptools>=62,<75" "wheel>=0.38,<0.44" "packaging>=21,<24"
 RUN python -m build --wheel --no-isolation --outdir /wheels
 
 # ---------------------------------------------------------------------------
