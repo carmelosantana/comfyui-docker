@@ -11,8 +11,8 @@ Upstream ([lecode-official/comfyui-docker](https://github.com/lecode-official/co
 is a clean, well-built image, but it ships ComfyUI-Manager in a way that never actually turns
 Manager on. It bakes Manager `4.0.5` into the image, but it never `pip install`s the Manager
 package and never passes `main.py --enable-manager`, so Manager v4's routes never register. The
-result is that any tool driving Manager over its API — for example ComfyUI-MCP — hits dead
-endpoints:
+result is that any tool driving Manager over its API — for example
+[ComfyUI-MCP](https://github.com/artokun/comfyui-mcp) — hits dead endpoints:
 
 - programmatic node-pack installs return **HTTP `405`**, and
 - arbitrary-URL model downloads return **HTTP `500`** ("… REQUIRES Manager v4+").
