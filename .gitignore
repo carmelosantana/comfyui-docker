@@ -7,3 +7,7 @@ Thumbs.db
 /data/
 # Local env with real paths/secrets
 .env
+
+# Internal design/process artifacts (not part of the public image repo)
+docs/superpowers/
+.superpowers/
