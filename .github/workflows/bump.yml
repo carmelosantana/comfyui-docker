@@ -1,0 +1,47 @@
+name: Bump ComfyUI version
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'   # weekly, before the build cron
+  workflow_dispatch: {}
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Determine current vs latest ComfyUI
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          current="$(grep -oP '^ARG COMFYUI_VERSION=\K.*' Dockerfile)"
+          latest_tag="$(gh api repos/Comfy-Org/ComfyUI/releases/latest --jq .tag_name)"
+          latest="${latest_tag#v}"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          if [ "$current" != "$latest" ]; then echo "changed=1" >> "$GITHUB_OUTPUT"; else echo "changed=0" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Apply bump
+        if: steps.check.outputs.changed == '1'
+        run: |
+          sed -i "s/^ARG COMFYUI_REF=.*/ARG COMFYUI_REF=${{ steps.check.outputs.latest_tag }}/" Dockerfile
+          sed -i "s/^ARG COMFYUI_VERSION=.*/ARG COMFYUI_VERSION=${{ steps.check.outputs.latest }}/" Dockerfile
+
+      - name: Open PR
+        if: steps.check.outputs.changed == '1'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: bump/comfyui-${{ steps.check.outputs.latest }}
+          title: "chore: bump ComfyUI to ${{ steps.check.outputs.latest_tag }}"
+          body: |
+            Automated bump from ComfyUI ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}.
+            Merging triggers a rebuild + publish of `latest` and the pinned version tags.
+          commit-message: "chore: bump ComfyUI to ${{ steps.check.outputs.latest_tag }}"
