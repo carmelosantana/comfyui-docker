@@ -90,9 +90,22 @@ install_node_requirements() {
     touch "$sentinel"
 }
 
-# Seed a permissive Manager config at the path Manager v4 actually reads
+# Replace an INI key's line in $file, or append it under [default] if absent.
+_set_ini_key() {
+    local file="$1" key="$2" val="$3"
+    if grep -qE "^${key}[[:space:]]*=" "$file"; then
+        sed -i "s|^${key}[[:space:]]*=.*|${key} = ${val}|" "$file"
+    else
+        printf '%s = %s\n' "$key" "$val" >> "$file"
+    fi
+}
+
+# Seed a Manager config at the path Manager v4 actually reads
 # (folder_paths.get_system_user_directory("manager") -> user/__manager/config.ini),
 # but only when no config exists yet, so a user's own config is never clobbered.
+# The security_level/network_mode are env-overridable (default weak/public) so the
+# MCP's arbitrary-URL installs work out of the box while a stricter posture stays
+# one env var away.
 seed_manager_config() {
     local dest_dir="$COMFYUI_DIR/user/__manager"
     local dest="$dest_dir/config.ini"
@@ -100,11 +113,17 @@ seed_manager_config() {
         echo "Manager config already present; leaving it untouched."
         return 0
     fi
+    mkdir -p "$dest_dir"
     if [ -f "$MANAGER_CONFIG_SRC" ]; then
-        mkdir -p "$dest_dir"
         cp "$MANAGER_CONFIG_SRC" "$dest"
-        echo "Seeded default Manager config at $dest."
+    else
+        printf '[default]\n' > "$dest"
     fi
+    local level="${MANAGER_SECURITY_LEVEL:-weak}"
+    local netmode="${MANAGER_NETWORK_MODE:-public}"
+    _set_ini_key "$dest" security_level "$level"
+    _set_ini_key "$dest" network_mode "$netmode"
+    echo "Seeded Manager config at $dest (security_level=$level, network_mode=$netmode)."
 }
 
 main() {

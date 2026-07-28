@@ -75,4 +75,16 @@ printf '[default]\nsecurity_level = normal\n' > "$dest"
 seed_manager_config
 assert_eq "normal" "$(sed -n 's/^security_level = //p' "$dest")" "existing user config preserved"
 
+# --- Task 6 fix: security level is env-overridable (default weak) ---
+# Use FRESH COMFYUI_DIR dirs each time so dest is absent (seed no-ops if dest exists).
+COMFYUI_DIR="$workdir/opt_seclvl_default"; mkdir -p "$COMFYUI_DIR"
+MANAGER_CONFIG_SRC="$workdir/tmpl.ini"
+printf '[default]\nsecurity_level = weak\nnetwork_mode = public\n' > "$MANAGER_CONFIG_SRC"
+( unset MANAGER_SECURITY_LEVEL; seed_manager_config )
+assert_eq "weak" "$(sed -n 's/^security_level = //p' "$COMFYUI_DIR/user/__manager/config.ini")" "default security_level is weak"
+
+COMFYUI_DIR="$workdir/opt_seclvl_override"; mkdir -p "$COMFYUI_DIR"
+MANAGER_SECURITY_LEVEL="normal" seed_manager_config
+assert_eq "normal" "$(sed -n 's/^security_level = //p' "$COMFYUI_DIR/user/__manager/config.ini")" "MANAGER_SECURITY_LEVEL overrides to normal"
+
 finish
