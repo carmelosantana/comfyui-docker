@@ -87,4 +87,26 @@ COMFYUI_DIR="$workdir/opt_seclvl_override"; mkdir -p "$COMFYUI_DIR"
 MANAGER_SECURITY_LEVEL="normal" seed_manager_config
 assert_eq "normal" "$(sed -n 's/^security_level = //p' "$COMFYUI_DIR/user/__manager/config.ini")" "MANAGER_SECURITY_LEVEL overrides to normal"
 
+# --- Fix: maybe_bootstrap_nodes only runs the bootstrap when opted in ---
+# Inject a fake bootstrap script that just touches a marker file.
+bs_dir="$workdir/bootstrap"; mkdir -p "$bs_dir"
+fake_script="$bs_dir/fake-bootstrap.sh"
+marker="$bs_dir/marker"
+cat > "$fake_script" <<'EOF'
+#!/usr/bin/env bash
+touch "$BOOTSTRAP_MARKER"
+EOF
+chmod +x "$fake_script"
+export BOOTSTRAP_MARKER="$marker"
+
+# (1) BOOTSTRAP_NODES unset -> no bootstrap, marker absent.
+rm -f "$marker"
+( unset BOOTSTRAP_NODES; BOOTSTRAP_SCRIPT="$fake_script" maybe_bootstrap_nodes )
+assert_true '[ ! -e "$marker" ]' "bootstrap NOT run when BOOTSTRAP_NODES unset"
+
+# (2) BOOTSTRAP_NODES=1 -> bootstrap runs, marker created.
+rm -f "$marker"
+BOOTSTRAP_NODES=1 BOOTSTRAP_SCRIPT="$fake_script" maybe_bootstrap_nodes
+assert_true '[ -e "$marker" ]' "bootstrap run when BOOTSTRAP_NODES=1"
+
 finish

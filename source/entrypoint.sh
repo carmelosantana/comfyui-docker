@@ -90,6 +90,25 @@ install_node_requirements() {
     touch "$sentinel"
 }
 
+# Clone the supported node packs into custom_nodes when the user opts in with
+# BOOTSTRAP_NODES=1. Runs before install_node_requirements so freshly-cloned packs'
+# requirements get installed on the same first boot. Script path and manifest are
+# overridable for tests; a missing script warns but never crashes boot.
+maybe_bootstrap_nodes() {
+    if [ "${BOOTSTRAP_NODES:-}" != "1" ]; then
+        return 0
+    fi
+    local script="${BOOTSTRAP_SCRIPT:-/opt/scripts/bootstrap-nodes.sh}"
+    if [ ! -f "$script" ]; then
+        echo "BOOTSTRAP_NODES=1 but bootstrap script not found at $script; skipping."
+        return 0
+    fi
+    export NODE_MANIFEST="${NODE_MANIFEST:-/opt/scripts/node-manifest.txt}"
+    export CUSTOM_NODES_DIR
+    echo "Bootstrapping node packs (BOOTSTRAP_NODES=1)..."
+    bash "$script"
+}
+
 # Replace an INI key's line in $file, or append it under [default] if absent.
 _set_ini_key() {
     local file="$1" key="$2" val="$3"
@@ -133,6 +152,8 @@ main() {
     link_manager
     echo "Seeding Manager config (if absent)..."
     seed_manager_config
+    echo "Bootstrapping node packs (if opted in)..."
+    maybe_bootstrap_nodes
     echo "Installing custom-node requirements (once)..."
     install_node_requirements
 

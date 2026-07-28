@@ -45,6 +45,9 @@ EXPOSE 8188
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=5 \
     CMD curl --fail --silent http://localhost:8188/ >/dev/null || exit 1
 
+COPY scripts/ /opt/scripts/
+RUN chmod +x /opt/scripts/*.sh
+
 COPY source/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]

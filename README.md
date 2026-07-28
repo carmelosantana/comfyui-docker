@@ -37,6 +37,8 @@ recreate.
 | Var | Default | Meaning |
 |---|---|---|
 | `IMAGE_TAG` | `latest` | Image tag to run |
+| `COMFYUI_PORT` | `8188` | Host port published to ComfyUI's `8188` |
+| `GPU_COUNT` | `1` | Number of GPUs reserved for the container |
 | `USER_ID` / `GROUP_ID` | `1000` | Host uid/gid that should own files in the mounts |
 | `MODELS_PATH` | `./data/models` (3090 sample: `/mnt/Data/ComfyUI/models`) | Models mount |
 | `CUSTOM_NODES_PATH` | `./data/custom_nodes` (3090: `/mnt/Data/ComfyUI/custom_nodes`) | Custom nodes mount |
@@ -56,7 +58,7 @@ recreate.
 
 ## Installing the video/audio node packs
 
-Set `BOOTSTRAP_NODES=1` (or run `scripts/bootstrap-nodes.sh` inside the container) to clone
+Set `BOOTSTRAP_NODES=1` (or run `/opt/scripts/bootstrap-nodes.sh` inside the container) to clone
 WanVideoWrapper, VideoHelperSuite, TTS-Audio-Suite, and the HuggingFace Downloader into the
 mounted `custom_nodes`. Edit `scripts/node-manifest.txt` to add your own.
 
