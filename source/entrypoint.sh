@@ -151,6 +151,22 @@ seed_manager_config() {
     echo "Seeded Manager config at $dest (security_level=$level, network_mode=$netmode)."
 }
 
+# Transform the ComfyUI arg list for the sage-attention toggle. When USE_SAGE_ATTENTION=1,
+# drop any --use-pytorch-cross-attention (sage replaces it) and append --use-sage-attention.
+# Otherwise echo the args unchanged. Prints one arg per line (consumed via mapfile).
+apply_sage_attention() {
+    if [ "${USE_SAGE_ATTENTION:-0}" != "1" ]; then
+        (( $# )) && printf '%s\n' "$@"
+        return 0
+    fi
+    local a
+    for a in "$@"; do
+        [ "$a" = "--use-pytorch-cross-attention" ] && continue
+        printf '%s\n' "$a"
+    done
+    printf '%s\n' "--use-sage-attention"
+}
+
 main() {
     echo "Creating model directories..."
     create_model_dirs
@@ -163,10 +179,12 @@ main() {
     echo "Installing custom-node requirements (once)..."
     install_node_requirements
 
+    mapfile -t COMFY_ARGS < <(apply_sage_attention "$@")
+
     if [ -z "${USER_ID:-}" ] || [ -z "${GROUP_ID:-}" ]; then
         echo "Running container as $(id -un)..."
         exec /opt/conda/bin/python main.py \
-            --port 8188 --listen 0.0.0.0 --disable-auto-launch --enable-manager "$@"
+            --port 8188 --listen 0.0.0.0 --disable-auto-launch --enable-manager "${COMFY_ARGS[@]}"
     fi
 
     echo "Setting up non-root user ${USER_ID}:${GROUP_ID}..."
@@ -178,7 +196,7 @@ main() {
     echo "Running container as comfyui-user (${USER_ID}:${GROUP_ID})..."
     exec sudo --set-home --preserve-env=PATH --user "#${USER_ID}" \
         /opt/conda/bin/python main.py \
-            --port 8188 --listen 0.0.0.0 --disable-auto-launch --enable-manager "$@"
+            --port 8188 --listen 0.0.0.0 --disable-auto-launch --enable-manager "${COMFY_ARGS[@]}"
 }
 
 # Only run when executed directly, not when sourced by tests.
