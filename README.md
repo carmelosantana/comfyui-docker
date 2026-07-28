@@ -50,6 +50,7 @@ recreate.
 | `BOOTSTRAP_NODES` | unset | Set `1` to install the supported node packs on first boot |
 | `MANAGER_SECURITY_LEVEL` | `weak` | Manager security level written to `user/__manager/config.ini`. `weak` is what lets the MCP do arbitrary-URL model + node-pack installs (clears the v3.x `405`/`500`); raise it (`normal`/`normal-`/`strong`) to lock those down. Applied only when the config is first seeded — to change it later, edit `user/__manager/config.ini` directly (or delete it to re-seed from the env var) |
 | `MANAGER_NETWORK_MODE` | `public` | Manager network mode written to `user/__manager/config.ini` |
+| `USE_SAGE_ATTENTION` | `1` in `-sage` images, else unset | On the `-sage` image, appends `--use-sage-attention` (and drops `--use-pytorch-cross-attention`). Set `0` to disable. No effect on the base image |
 
 ## Updating
 
@@ -63,6 +64,22 @@ recreate.
 Set `BOOTSTRAP_NODES=1` (or run `/opt/scripts/bootstrap-nodes.sh` inside the container) to clone
 WanVideoWrapper, VideoHelperSuite, TTS-Audio-Suite, and the HuggingFace Downloader into the
 mounted `custom_nodes`. Edit `scripts/node-manifest.txt` to add your own.
+
+## SageAttention build (`-sage` tags)
+
+For video generation on Ampere (RTX 3090), the `*-sage` / `latest-sage` image variant enables
+ComfyUI's `--use-sage-attention` — the largest real attention speedup on that hardware. It is the
+same image as the default, plus SageAttention 2.x compiled from pinned upstream source
+(`thu-ml/SageAttention`) in the matching `pytorch/pytorch:…-devel` build stage — no untrusted
+prebuilt wheels.
+
+- **Run it:** point your stack at a `-sage` tag (e.g. `ghcr.io/carmelosantana/comfyui-docker:latest-sage`).
+  Sage attention is **on by default** (`USE_SAGE_ATTENTION=1` baked in). Set `USE_SAGE_ATTENTION=0`
+  in the environment to A/B against the default backend without a rebuild. `--use-sage-attention`
+  replaces `--use-pytorch-cross-attention`, so drop that flag from your `command:`.
+- **3090 sample:** `docker-compose-3090-sage-sample.yml` is the swap-and-go stack.
+- **Requires an NVIDIA GPU at runtime** (the kernels are CUDA). CI only verifies the package builds
+  and installs; real kernel execution is validated on the GPU.
 
 ## Publishing (maintainer note)
 
