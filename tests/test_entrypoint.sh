@@ -60,4 +60,19 @@ assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "second unforced 
 PATH="$pipbin:$PATH" FORCE_NODE_REQS="1" install_node_requirements
 assert_eq "2" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "FORCE_NODE_REQS reinstalls"
 
+# --- Task 6: seed_manager_config copies only when absent ---
+# NOTE: Manager v4 reads its config from get_system_user_directory("manager"),
+# i.e. "$COMFYUI_DIR/user/__manager/config.ini" (verified against the built image),
+# NOT the legacy "user/default/ComfyUI-Manager/config.ini" path.
+COMFYUI_DIR="$workdir/opt2"; mkdir -p "$COMFYUI_DIR"
+MANAGER_CONFIG_SRC="$workdir/default-config.ini"; printf '[default]\nsecurity_level = weak\n' > "$MANAGER_CONFIG_SRC"
+dest="$COMFYUI_DIR/user/__manager/config.ini"
+seed_manager_config
+assert_true '[ -f "$dest" ]' "config seeded when absent"
+assert_eq "weak" "$(sed -n 's/^security_level = //p' "$dest")" "seeded config has security_level weak"
+# Now a user-modified config must NOT be overwritten.
+printf '[default]\nsecurity_level = normal\n' > "$dest"
+seed_manager_config
+assert_eq "normal" "$(sed -n 's/^security_level = //p' "$dest")" "existing user config preserved"
+
 finish
