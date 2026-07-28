@@ -2,3 +2,8 @@
 # Operating system-specific icon/file preview databases
 .DS_Store
 Thumbs.db
+
+# Local runtime data (bind-mount targets for the generic compose)
+/data/
+# Local env with real paths/secrets
+.env
