@@ -1,0 +1,103 @@
+name: Build & Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * 1'   # weekly rebuild so "latest" tracks base-image/security updates
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Read version ARGs from Dockerfile
+        id: vers
+        run: |
+          comfyui="$(grep -oP '^ARG COMFYUI_VERSION=\K.*' Dockerfile)"
+          echo "comfyui=${comfyui}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (load locally for smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: comfyui-ci:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — boots on :8188 and Manager reports v4+
+        run: |
+          docker run -d --name smoke -p 8188:8188 comfyui-ci:smoke --cpu
+          echo "Waiting for ComfyUI to answer on :8188..."
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8188/ >/dev/null 2>&1; then ok=1; break; fi
+            sleep 5
+          done
+          [ "${ok:-}" = "1" ] || { echo "ComfyUI did not start"; docker logs smoke; exit 1; }
+          ver="$(docker exec smoke git -C /opt/comfyui-manager describe --tags --always)"
+          echo "Manager version: $ver"
+          case "$ver" in 4.*|v4.*) echo "Manager v4+ OK" ;; *) echo "Manager is NOT v4+: $ver"; docker logs smoke; exit 1 ;; esac
+          docker rm -f smoke
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags & labels
+        id: meta
+        if: github.event_name != 'pull_request'
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=comfyui-${{ steps.vers.outputs.comfyui }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{version}}-comfyui-${{ steps.vers.outputs.comfyui }}
+          labels: |
+            org.opencontainers.image.title=ComfyUI Docker (carmelosantana)
+            org.opencontainers.image.authors=Carmelo Santana <me@carmelosantana.com>
+
+      - name: Build & push
+        id: push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
