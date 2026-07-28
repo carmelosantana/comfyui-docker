@@ -1,3 +1,10 @@
+# ComfyUI Docker (carmelosantana)
+
+> Forked from [lecode-official/comfyui-docker](https://github.com/lecode-official/comfyui-docker)
+> (MIT © David Neumann). This fork ships ComfyUI-Manager **v4+**, fixes the stale-Manager
+> shadowing bug on persistent `custom_nodes` mounts, adds RTX 3090 runtime defaults, and
+> publishes to `ghcr.io/carmelosantana/comfyui-docker`.
+
 # ComfyUI Docker
 
 This is a Docker image for [ComfyUI](https://www.comfy.org/), which makes it extremely easy to run ComfyUI on Linux and Windows WSL2. The image also includes the [ComfyUI Manager](https://github.com/Comfy-Org/ComfyUI-Manager) extension.
