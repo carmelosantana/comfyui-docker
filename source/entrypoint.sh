@@ -71,6 +71,25 @@ chown_app_dirs() {
     find "$COMFYUI_DIR" -maxdepth 1 -type f -exec chown "$uid:$gid" {} + 2>/dev/null || true
 }
 
+install_node_requirements() {
+    local sentinel="$CUSTOM_NODES_DIR/.requirements-installed"
+    if [ -f "$sentinel" ] && [ "${FORCE_NODE_REQS:-}" != "1" ]; then
+        echo "Node requirements already installed (sentinel present); skipping."
+        return 0
+    fi
+    local dir name
+    for dir in "$CUSTOM_NODES_DIR"/*; do
+        [ -d "$dir" ] || continue
+        name="$(basename "$dir")"
+        [ "$name" = "ComfyUI-Manager" ] && continue
+        if [ -f "$dir/requirements.txt" ]; then
+            echo "Installing requirements for $name..."
+            pip install --requirement "$dir/requirements.txt" || true
+        fi
+    done
+    touch "$sentinel"
+}
+
 main() {
     echo "Creating model directories..."
     create_model_dirs

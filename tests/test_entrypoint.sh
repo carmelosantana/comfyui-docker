@@ -42,4 +42,22 @@ assert_true '! echo "$chown_list" | grep -qx "$COMFYUI_DIR/output"' "does NOT ch
 assert_true '! echo "$chown_list" | grep -qx "$COMFYUI_DIR/input"' "does NOT chown the input mount"
 assert_true '! echo "$chown_list" | grep -qx "$COMFYUI_DIR/custom_nodes"' "does NOT chown the custom_nodes mount"
 
+# --- Task 5: node requirements install runs once (sentinel) ---
+CUSTOM_NODES_DIR="$workdir/cn"; mkdir -p "$CUSTOM_NODES_DIR/PackA"
+echo "somepkg==1.0" > "$CUSTOM_NODES_DIR/PackA/requirements.txt"
+pipbin="$workdir/bin"; mkdir -p "$pipbin"
+cat > "$pipbin/pip" <<'EOF'
+#!/usr/bin/env bash
+echo "$@" >> "$PIP_LOG"
+EOF
+chmod +x "$pipbin/pip"
+export PIP_LOG="$workdir/pip.log"; : > "$PIP_LOG"
+PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
+assert_true '[ -f "$CUSTOM_NODES_DIR/.requirements-installed" ]' "sentinel written after first run"
+assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "PackA requirements installed once"
+PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
+assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "second unforced run is a no-op"
+PATH="$pipbin:$PATH" FORCE_NODE_REQS="1" install_node_requirements
+assert_eq "2" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "FORCE_NODE_REQS reinstalls"
+
 finish
