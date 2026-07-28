@@ -37,6 +37,40 @@ link_manager() {
     ln -s "$MANAGER_SRC" "$target"
 }
 
+# Bind mounts that arrive host-owned and must NOT be recursively chowned every boot.
+CHOWN_EXCLUDE=(models output input custom_nodes user)
+
+# Print the directories that SHOULD be recursively chowned: the baked manager and the
+# ComfyUI application directories, but never the large host bind mounts.
+dirs_to_chown() {
+    echo "$MANAGER_SRC"
+    local entry base
+    for entry in "$COMFYUI_DIR"/*/; do
+        base="$(basename "$entry")"
+        local skip=0 ex
+        for ex in "${CHOWN_EXCLUDE[@]}"; do
+            [ "$base" = "$ex" ] && skip=1 && break
+        done
+        [ "$skip" -eq 0 ] && echo "${entry%/}"
+    done
+}
+
+# Recursively chown app dirs; the excluded mounts get only a shallow, cheap ownership fix
+# (the container process writing as the target uid handles new files inside them).
+chown_app_dirs() {
+    local uid="$1" gid="$2" d
+    while IFS= read -r d; do
+        [ -e "$d" ] && chown --recursive "$uid:$gid" "$d" 2>/dev/null || true
+    done < <(dirs_to_chown)
+    local ex
+    for ex in "${CHOWN_EXCLUDE[@]}"; do
+        [ -e "$COMFYUI_DIR/$ex" ] && chown "$uid:$gid" "$COMFYUI_DIR/$ex" 2>/dev/null || true
+    done
+    # Shallow chown of the app root and its top-level files (not the mounts within).
+    chown "$uid:$gid" "$COMFYUI_DIR" 2>/dev/null || true
+    find "$COMFYUI_DIR" -maxdepth 1 -type f -exec chown "$uid:$gid" {} + 2>/dev/null || true
+}
+
 main() {
     echo "Creating model directories..."
     create_model_dirs
