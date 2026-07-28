@@ -1,85 +1,57 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Creates the directories for the models inside of the volume that is mounted from the host
-echo "Creating directories for models..."
+# Configurable locations (overridable for tests).
+COMFYUI_DIR="${COMFYUI_DIR:-/opt/comfyui}"
+MANAGER_SRC="${MANAGER_SRC:-/opt/comfyui-manager}"
+CUSTOM_NODES_DIR="${CUSTOM_NODES_DIR:-$COMFYUI_DIR/custom_nodes}"
+MANAGER_CONFIG_SRC="${MANAGER_CONFIG_SRC:-/opt/comfyui-manager-config.ini}"
+
 MODEL_DIRECTORIES=(
-    "checkpoints"
-    "clip"
-    "clip_vision"
-    "configs"
-    "controlnet"
-    "diffusers"
-    "diffusion_models"
-    "embeddings"
-    "gligen"
-    "hypernetworks"
-    "loras"
-    "photomaker"
-    "style_models"
-    "text_encoders"
-    "unet"
-    "upscale_models"
-    "vae"
-    "vae_approx"
+    checkpoints clip clip_vision configs controlnet diffusers diffusion_models
+    embeddings gligen hypernetworks loras photomaker style_models text_encoders
+    unet upscale_models vae vae_approx audio_encoders
 )
-for MODEL_DIRECTORY in ${MODEL_DIRECTORIES[@]}; do
-    mkdir -p /opt/comfyui/models/$MODEL_DIRECTORY
-done
 
-# Creates the symlink for the ComfyUI Manager to the custom nodes directory, which is also mounted from the host
-echo "Creating symlink for ComfyUI Manager..."
-rm --force /opt/comfyui/custom_nodes/ComfyUI-Manager
-ln -s \
-    /opt/comfyui-manager \
-    /opt/comfyui/custom_nodes/ComfyUI-Manager
+create_model_dirs() {
+    mkdir -p "$CUSTOM_NODES_DIR"
+    local d
+    for d in "${MODEL_DIRECTORIES[@]}"; do
+        mkdir -p "$COMFYUI_DIR/models/$d"
+    done
+}
 
-# The custom nodes that were installed using the ComfyUI Manager may have requirements of their own, which are not installed when the container is
-# started for the first time; this loops over all custom nodes and installs the requirements of each custom node
-echo "Installing requirements for custom nodes..."
-for CUSTOM_NODE_DIRECTORY in /opt/comfyui/custom_nodes/*;
-do
-    if [ "$CUSTOM_NODE_DIRECTORY" != "/opt/comfyui/custom_nodes/ComfyUI-Manager" ];
-    then
-        if [ -f "$CUSTOM_NODE_DIRECTORY/requirements.txt" ];
-        then
-            CUSTOM_NODE_NAME=${CUSTOM_NODE_DIRECTORY##*/}
-            CUSTOM_NODE_NAME=${CUSTOM_NODE_NAME//[-_]/ }
-            echo "Installing requirements for $CUSTOM_NODE_NAME..."
-            pip install --requirement "$CUSTOM_NODE_DIRECTORY/requirements.txt"
+# Ensure custom_nodes/ComfyUI-Manager is a symlink to the baked (v4+) manager.
+# A stale real directory from a legacy git-clone would otherwise shadow it.
+link_manager() {
+    local target="$CUSTOM_NODES_DIR/ComfyUI-Manager"
+    if [ -L "$target" ]; then
+        rm -f "$target"
+    elif [ -e "$target" ]; then
+        if [ ! -e "$target.bak" ]; then
+            mv "$target" "$target.bak"
+        else
+            rm -rf "$target"
         fi
     fi
-done
+    ln -s "$MANAGER_SRC" "$target"
+}
 
-# Under normal circumstances, the container would be run as the root user, which is not ideal, because the files that are created by the container in
-# the volumes mounted from the host, i.e., custom nodes and models downloaded by the ComfyUI Manager, are owned by the root user; the user can specify
-# the user ID and group ID of the host user as environment variables when starting the container; if these environment variables are set, a non-root
-# user with the specified user ID and group ID is created, and ComfyUI is run as this user; ComfyUI is started at its default port (--port 8188); the
-# IP address is changed from localhost to 0.0.0.0 (--listen 0.0.0.0), because Docker is only forwarding traffic to the IP address it assigns to the
-# container, which is unknown at build time; listening to 0.0.0.0 means that ComfyUI listens to all incoming traffic; the auto-launch feature is
-# disabled (--disable-auto-launch), because we do not want (nor is it possible) to open a browser window in a Docker container; to allow users to pass
-# in additional command line arguments ("$@"), for example, --enable-cors-header to enable CORS and allow external web apps to interact with ComfyUI
-# in this container
-if [ -z "$USER_ID" ] || [ -z "$GROUP_ID" ];
-then
-    echo "Running container as $USER..."
-    exec /opt/conda/bin/python main.py \
-        --port 8188 \
-        --listen 0.0.0.0 \
-        --disable-auto-launch \
-        "$@"
-else
-    echo "Creating non-root user..."
-    getent group $GROUP_ID > /dev/null 2>&1 || groupadd --gid $GROUP_ID comfyui-user
-    id -u $USER_ID > /dev/null 2>&1 || useradd --uid $USER_ID --gid $GROUP_ID --create-home comfyui-user
-    chown --recursive $USER_ID:$GROUP_ID /opt/comfyui
-    chown --recursive $USER_ID:$GROUP_ID /opt/comfyui-manager
-    export PATH=$PATH:/home/comfyui-user/.local/bin
+main() {
+    echo "Creating model directories..."
+    create_model_dirs
+    echo "Linking ComfyUI Manager..."
+    link_manager
+    # (config seeding, requirement install, chown, and exec are added in later tasks)
+    run_comfyui "$@"
+}
 
-    echo "Running container as comfyui-user ($USER_ID:$GROUP_ID)..."
-    sudo --set-home --preserve-env=PATH --user \#$USER_ID \
-        /opt/conda/bin/python main.py \
-            --port 8188 \
-            --listen 0.0.0.0 \
-            --disable-auto-launch \
-            "$@"
+# Placeholder exec; replaced/extended by later tasks. Kept minimal so the file is runnable.
+run_comfyui() {
+    exec /opt/conda/bin/python main.py --port 8188 --listen 0.0.0.0 --disable-auto-launch "$@"
+}
+
+# Only run when executed directly, not when sourced by tests.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
 fi
