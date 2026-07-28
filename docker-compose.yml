@@ -1,0 +1,24 @@
+name: comfyui
+
+services:
+  comfyui:
+    image: ghcr.io/carmelosantana/comfyui-docker:${IMAGE_TAG:-latest}
+    container_name: comfyui
+    restart: unless-stopped
+    environment:
+      USER_ID: "${USER_ID:-1000}"
+      GROUP_ID: "${GROUP_ID:-1000}"
+    ports:
+      - "${COMFYUI_PORT:-8188}:8188"
+    volumes:
+      - ${MODELS_PATH:-./data/models}:/opt/comfyui/models:rw
+      - ${CUSTOM_NODES_PATH:-./data/custom_nodes}:/opt/comfyui/custom_nodes:rw
+      - ${OUTPUT_PATH:-./data/output}:/opt/comfyui/output:rw
+      - ${INPUT_PATH:-./data/input}:/opt/comfyui/input:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]

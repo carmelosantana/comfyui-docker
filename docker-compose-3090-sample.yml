@@ -1,0 +1,35 @@
+name: comfyui-docker
+
+# Opinionated sample for Carmelo's TrueNAS box (single RTX 3090, 24GB).
+# A 1:1 replacement for the old lecode stack: only the image owner changed, plus a
+# research-backed 3090 command/env. Drop this into Portainer over the old stack.
+services:
+  comfyui:
+    image: ghcr.io/carmelosantana/comfyui-docker:${IMAGE_TAG:-latest}
+    container_name: comfyui-lecode
+    restart: unless-stopped
+    extra_hosts:
+      - "ollama:host-gateway"
+    environment:
+      USER_ID: "${USER_ID:-1000}"
+      GROUP_ID: "${GROUP_ID:-1000}"
+      PYTORCH_ALLOC_CONF: "expandable_segments:True"
+    ports:
+      - "8188:8188"
+    volumes:
+      - ${MODELS_PATH:-/mnt/Data/ComfyUI/models}:/opt/comfyui/models:rw
+      - ${CUSTOM_NODES_PATH:-/mnt/Data/ComfyUI/custom_nodes}:/opt/comfyui/custom_nodes:rw
+      - ${OUTPUT_PATH:-/mnt/Data/ComfyUI/output}:/opt/comfyui/output:rw
+      - /mnt/Data/ComfyUI/input:/opt/comfyui/input:rw
+      - /mnt/Data/ComfyUI/user/default/workflows:/opt/comfyui/user/default/workflows:rw
+    command:
+      - "--use-pytorch-cross-attention"
+      - "--reserve-vram"
+      - "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
