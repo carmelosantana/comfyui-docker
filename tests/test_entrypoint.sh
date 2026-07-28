@@ -113,4 +113,28 @@ rm -f "$marker"
 BOOTSTRAP_NODES=1 BOOTSTRAP_SCRIPT="$fake_script" maybe_bootstrap_nodes
 assert_true '[ -e "$marker" ]' "bootstrap run when BOOTSTRAP_NODES=1"
 
+# --- Sage: apply_sage_attention transforms the ComfyUI arg list ---
+# (off) args pass through unchanged, no sage flag.
+out="$( unset USE_SAGE_ATTENTION; apply_sage_attention --reserve-vram 1 )"
+assert_true '! printf "%s" "$out" | grep -q -- "--use-sage-attention"' "toggle off: no --use-sage-attention added"
+assert_eq "$(printf '%s\n' --reserve-vram 1)" "$out" "toggle off: args unchanged"
+
+# (on) appends --use-sage-attention.
+out="$( USE_SAGE_ATTENTION=1 apply_sage_attention --reserve-vram 1 )"
+assert_true 'printf "%s\n" "$out" | grep -qx -- "--use-sage-attention"' "toggle on: --use-sage-attention appended"
+assert_true 'printf "%s\n" "$out" | grep -qx -- "--reserve-vram"' "toggle on: other args preserved"
+
+# (on) drops the redundant cross-attention flag.
+out="$( USE_SAGE_ATTENTION=1 apply_sage_attention --use-pytorch-cross-attention --reserve-vram 1 )"
+assert_true '! printf "%s\n" "$out" | grep -qx -- "--use-pytorch-cross-attention"' "toggle on: cross-attention flag dropped"
+assert_true 'printf "%s\n" "$out" | grep -qx -- "--use-sage-attention"' "toggle on: sage flag present when cross-attention was passed"
+
+# (on) no user args -> exactly the sage flag.
+out="$( USE_SAGE_ATTENTION=1 apply_sage_attention )"
+assert_eq "--use-sage-attention" "$out" "toggle on, no args: exactly the sage flag"
+
+# (explicit 0) treated as off.
+out="$( USE_SAGE_ATTENTION=0 apply_sage_attention --cpu )"
+assert_true '! printf "%s" "$out" | grep -q -- "--use-sage-attention"' "USE_SAGE_ATTENTION=0 is off"
+
 finish
