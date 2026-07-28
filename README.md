@@ -5,17 +5,34 @@
 > `--enable-manager`), clears any stale v3 Manager on persistent `custom_nodes` mounts, adds
 > RTX 3090 runtime defaults, and publishes to `ghcr.io/carmelosantana/comfyui-docker`.
 
-## What this image does
+## Why this fork?
 
-- Ships **ComfyUI-Manager v4+** (required for programmatic control: node-pack installs and
-  arbitrary-URL model downloads — the v3.x `405`/`500` failures are gone).
-- **Actually activates Manager v4:** it is a pip package enabled by `main.py --enable-manager`
-  — not a git-clone symlinked into `custom_nodes` (the v3 mechanism, which v4 rejects as
-  `IMPORT FAILED`). The image `pip install`s it and passes the flag. The entrypoint also
-  backs up/removes any stale v3 `custom_nodes/ComfyUI-Manager` (to `ComfyUI-Manager.bak`) so it
-  can't shadow or import-fail — **no** symlink is created.
-- Pinnable ComfyUI (`COMFYUI_REF`) + Manager (`COMFYUI_MANAGER_VERSION`), tracked by CI.
-- RTX 3090 runtime defaults; per-GPU guidance in [docs/gpu-settings.md](docs/gpu-settings.md).
+Upstream ([lecode-official/comfyui-docker](https://github.com/lecode-official/comfyui-docker))
+is a clean, well-built image, but it ships ComfyUI-Manager in a way that never actually turns
+Manager on. It bakes Manager `4.0.5` into the image, but it never `pip install`s the Manager
+package and never passes `main.py --enable-manager`, so Manager v4's routes never register. The
+result is that any tool driving Manager over its API — for example ComfyUI-MCP — hits dead
+endpoints:
+
+- programmatic node-pack installs return **HTTP `405`**, and
+- arbitrary-URL model downloads return **HTTP `500`** ("… REQUIRES Manager v4+").
+
+This fork fixes that, and adds runtime defaults and version pinning on top. What's different:
+
+- **Manager v4 is actually activated.** Manager v4 is a *pip package* enabled by a launch flag,
+  not the v3 mechanism of a git clone symlinked into `custom_nodes` (which v4 rejects as
+  `IMPORT FAILED`). So the image `pip install`s the Manager package **and** passes
+  `--enable-manager`. On boot the entrypoint also backs up and removes any stale v3
+  `custom_nodes/ComfyUI-Manager` (to `ComfyUI-Manager.bak`) so it can't shadow the pip package —
+  **no** symlink is created. The `405`/`500` are gone, verified `200`/`200` against the shipped
+  image (see [docs/acceptance-2026-07-28.md](docs/acceptance-2026-07-28.md)). The Manager v4 API
+  lives under `/v2/manager/*`.
+- **Research-backed RTX 3090 runtime defaults**, plus a per-GPU table, in
+  [docs/gpu-settings.md](docs/gpu-settings.md).
+- **Pinnable versions, tracked by CI.** Pin ComfyUI (`COMFYUI_REF`) and Manager
+  (`COMFYUI_MANAGER_VERSION`); CI opens a weekly PR that bumps them to the latest releases.
+- **Drop-in replacement.** It keeps lecode's environment-variable interface unchanged, so
+  migrating is just swapping the image and redeploying — no compose rewrite.
 
 ## Quick start (generic)
 
