@@ -23,7 +23,8 @@ RUN apt-get update --assume-yes && \
         sudo \
         curl \
         libgl1-mesa-glx \
-        libglib2.0-0 && \
+        libglib2.0-0 \
+        ffmpeg && \
     rm -rf /var/cache/apt/archives /var/lib/apt/lists/*
 
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git /opt/comfyui && \
@@ -42,6 +43,16 @@ RUN pip install \
 # `main.py --enable-manager` can activate it via its native hook. The clone above stays as the
 # version pin and MANAGER_SRC referenced by the entrypoint.
 RUN pip install /opt/comfyui-manager
+
+# Common heavy deps used by many video/vision node packs, baked so they survive a container
+# recreate (the conda env is not a mount). Per-pack extras still install on boot via the
+# entrypoint. opencv-python-headless (no GUI libs) provides cv2 for a headless server.
+RUN pip install --no-cache-dir \
+    accelerate \
+    opencv-python-headless \
+    transformers \
+    deepdiff \
+    ollama
 
 # Default Manager config, seeded by the entrypoint only when the user has none.
 COPY source/manager-config.ini /opt/comfyui-manager-config.ini
