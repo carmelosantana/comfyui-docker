@@ -179,6 +179,13 @@ seed_baked_nodes() {
         fi
         echo "Seeding baked node pack $name into custom_nodes..."
         cp -a "$src" "$dest"
+        # custom_nodes is in CHOWN_EXCLUDE (never bulk-chowned), and this cp runs as root, so the
+        # freshly-seeded pack lands root-owned — the runtime user then can't write pack state
+        # (.cnr-id, TTS caches). Chown just this newly-seeded tree to the runtime user. Numeric IDs
+        # work before useradd; the guard makes it a no-op in pure-root mode.
+        if [ -n "${USER_ID:-}" ] && [ -n "${GROUP_ID:-}" ]; then
+            chown -R "$USER_ID:$GROUP_ID" "$dest" 2>/dev/null || true
+        fi
     done
 }
 

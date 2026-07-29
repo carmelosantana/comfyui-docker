@@ -9,7 +9,7 @@
 
 Upstream ([lecode-official/comfyui-docker](https://github.com/lecode-official/comfyui-docker))
 is a clean, well-built image, but it ships ComfyUI-Manager in a way that never actually turns
-Manager on. It bakes Manager `4.0.5` into the image, but it never `pip install`s the Manager
+Manager on. It bakes Manager `4.2.2` into the image, but it never `pip install`s the Manager
 package and never passes `main.py --enable-manager`, so Manager v4's routes never register. The
 result is that any tool driving Manager over its API — for example
 [ComfyUI-MCP](https://github.com/artokun/comfyui-mcp) — hits dead endpoints:
@@ -133,7 +133,7 @@ recreate.
 - **Pull a new image:** `docker compose pull && docker compose up -d`.
 - **Bump ComfyUI core:** CI opens a weekly PR bumping `ARG COMFYUI_REF`/`COMFYUI_VERSION` to the
   latest release; merging rebuilds and republishes `latest` + pinned tags. To pin a specific
-  version yourself, build with `--target base --build-arg COMFYUI_REF=v0.8.2`. The `-sage` image
+  version yourself, build with `--target base --build-arg COMFYUI_REF=v0.29.0`. The `-sage` image
   is built with `docker build --target sage .`.
 
 ## Node packs on by default (and how to disable)
@@ -190,6 +190,13 @@ prebuilt wheels.
 - **3090 sample:** `docker-compose-3090-sage-sample.yml` is the swap-and-go stack.
 - **Requires an NVIDIA GPU at runtime** (the kernels are CUDA). CI only verifies the package builds
   and installs; real kernel execution is validated on the GPU.
+
+> **⚠️ Do not use the global `--use-sage-attention` flag on fp8 image models.** SageAttention
+> produces all-black / NaN output on fp8 **image** checkpoints (Qwen-Image, Flux). It is meant for
+> **video** (Wan). On a mixed image+video box, keep `USE_SAGE_ATTENTION=0` (so image generation is
+> correct) and enable Sage **per-workflow** on the video model with KJNodes'
+> **"Patch Sage Attention KJ"** node — that scopes the speedup to the graph that benefits, instead
+> of the process-wide flag that breaks image gen.
 
 ## Publishing (maintainer note)
 

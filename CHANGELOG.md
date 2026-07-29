@@ -6,6 +6,15 @@
 - Ship ComfyUI-Manager v4+ and fix the custom_nodes Manager-shadowing bug.
 - Add RTX 3090 runtime defaults, generic + 3090 compose files, per-GPU docs.
 - New CI: build/smoke/publish to GHCR + scheduled ComfyUI version bump.
+- Bake the creator toolset (7 node packs) into the image, seeded into `custom_nodes` on boot with
+  category flags (`SEED_BAKED_NODES` + `SEED_{AUDIO,VIDEO,HELPER}_NODES`).
+- Bump ComfyUI `v0.8.2` → `v0.29.0` and ComfyUI-Manager `4.0.5` → `4.2.2`. The stale `v0.8.2` core
+  predated ComfyUI's new node-schema API that current KJNodes uses, causing `search_aliases` /
+  `advanced`-kwarg errors in the node menu; the bump clears them.
+- Fix seeded-pack ownership: baked packs copied into `custom_nodes` are now chowned to the runtime
+  user, so pack state (`.cnr-id`, TTS caches) is writable instead of root-owned.
+- Document that global `--use-sage-attention` produces black/NaN output on fp8 image models
+  (Qwen-Image/Flux); use `USE_SAGE_ATTENTION=0` + the per-workflow "Patch Sage Attention KJ" node.
 
 ## v0.6.3 (January 9, 2026)
 

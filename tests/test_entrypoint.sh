@@ -182,6 +182,13 @@ assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "second seed run
 ( BAKED_NODES_DIR="$workdir/nope"; seed_baked_nodes ) && rc=0 || rc=$?
 assert_eq "0" "$rc" "seed_baked_nodes no-ops when baked dir is absent"
 
+# Seeding still copies with USER_ID/GROUP_ID set — the chown branch runs (guarded `|| true`, so a
+# non-root harness where chown fails does not break the copy). Real ownership is verified on boot.
+CUSTOM_NODES_DIR="$workdir/cn_own"; mkdir -p "$CUSTOM_NODES_DIR"
+( USER_ID=1000 GROUP_ID=1000; seed_baked_nodes ) && rc=0 || rc=$?
+assert_eq "0" "$rc" "seed_baked_nodes succeeds with USER_ID/GROUP_ID set (chown branch)"
+assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "seeds pack when USER_ID/GROUP_ID set"
+
 # node_dep_signature is stable and content-sensitive.
 sigdir="$workdir/sigp"; mkdir -p "$sigdir"; echo "a==1" > "$sigdir/requirements.txt"
 s1="$(node_dep_signature "$sigdir")"
