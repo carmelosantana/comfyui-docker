@@ -43,7 +43,7 @@ overwritten; seeding is idempotent and skips any dir that already exists):**
 | --- | --- |
 | [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) v4 | Node/model management API (used by [ComfyUI-MCP](https://github.com/artokun/comfyui-mcp)). Activated as a `pip` package + `--enable-manager`, **not** seeded as a `custom_nodes` directory — see [Why this fork?](#why-this-fork) |
 | [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | Helper nodes (resize/mask/get-set) the Wan graphs need |
-| [ComfyUI-Frame-Interpolation](https://github.com/Fannovel16/ComfyUI-Frame-Interpolation) | RIFE / GIMM-VFI frame interpolation for smooth / 60fps output |
+| [ComfyUI-Frame-Interpolation](https://github.com/Fannovel16/ComfyUI-Frame-Interpolation) | RIFE frame interpolation for smooth / 60fps output (works out of the box); cupy-accelerated methods like GIMM-VFI need `cupy` added separately — the image bakes the no-cupy requirements |
 | [ComfyUI_essentials](https://github.com/cubiq/ComfyUI_essentials) | Common utility nodes many community workflows depend on |
 | [TTS-Audio-Suite](https://github.com/diodiogod/TTS-Audio-Suite) | TTS / voice-clone engines: ChatterBox, IndexTTS-2, F5-TTS, VibeVoice, Higgs Audio, CosyVoice3, RVC |
 
@@ -60,6 +60,10 @@ overwritten; seeding is idempotent and skips any dir that already exists):**
 > Any custom_nodes you drop into the mount — baked, bootstrapped, or your own — get their
 > `requirements.txt` (and `install.py`) auto-installed on the next boot, keyed on a content hash
 > so it only reinstalls when a pack's deps actually change (`FORCE_NODE_REQS=1` to force it).
+
+> Baked packs are seeded into `custom_nodes` once and never overwrite an existing copy. To pick up
+> a newer baked version after an image upgrade, delete that pack's directory from `custom_nodes`
+> and reboot the container — it re-seeds from the image.
 
 **System tools (apt):** `ffmpeg` (VideoHelperSuite decode/encode — `ffmpeg -version` works
 in-container), `git`, `aria2` (fast model downloads), `espeak-ng` (phonemizer for TTS), plus the
