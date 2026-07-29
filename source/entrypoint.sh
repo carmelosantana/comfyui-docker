@@ -129,16 +129,50 @@ install_node_requirements() {
     done
 }
 
+# Map a baked pack directory name to its seeding category (audio|video|helper), or "" if
+# uncategorized. Categories let a user disable a whole class of baked packs via SEED_{CAT}_NODES
+# without touching the others. Adding a baked pack (in the Dockerfile) should add it here too.
+baked_node_category() {
+    case "$1" in
+        TTS-Audio-Suite) echo audio ;;
+        ComfyUI-WanVideoWrapper|ComfyUI-VideoHelperSuite|ComfyUI-Frame-Interpolation) echo video ;;
+        ComfyUI-KJNodes|ComfyUI_essentials|ComfyUI_HuggingFace_Downloader) echo helper ;;
+        *) echo "" ;;
+    esac
+}
+
+# Whether a seeding category is enabled. Each SEED_{AUDIO,VIDEO,HELPER}_NODES defaults to 1 (on).
+# An uncategorized pack ("") is always enabled — it is gated only by the master SEED_BAKED_NODES.
+category_enabled() {
+    case "$1" in
+        audio)  [ "${SEED_AUDIO_NODES:-1}"  = "1" ] ;;
+        video)  [ "${SEED_VIDEO_NODES:-1}"  = "1" ] ;;
+        helper) [ "${SEED_HELPER_NODES:-1}" = "1" ] ;;
+        *)      return 0 ;;
+    esac
+}
+
 # Copy the baked node packs from the (non-mounted) staging dir into the live custom_nodes mount.
 # Runs BEFORE bootstrap/requirements so their deps are considered on the same boot. Idempotent:
 # an existing dir (a user's own copy or a prior seed) is left untouched, never clobbered.
+# On by default; SEED_BAKED_NODES=0 disables ALL seeding, and each SEED_{AUDIO,VIDEO,HELPER}_NODES=0
+# disables just that category. This is a local copy from the image — no git/network involved.
 seed_baked_nodes() {
+    if [ "${SEED_BAKED_NODES:-1}" != "1" ]; then
+        echo "SEED_BAKED_NODES=${SEED_BAKED_NODES:-1} — skipping all baked node seeding."
+        return 0
+    fi
     [ -d "$BAKED_NODES_DIR" ] || return 0
     mkdir -p "$CUSTOM_NODES_DIR"
-    local src name dest
+    local src name dest cat
     for src in "$BAKED_NODES_DIR"/*; do
         [ -d "$src" ] || continue
         name="$(basename "$src")"
+        cat="$(baked_node_category "$name")"
+        if ! category_enabled "$cat"; then
+            echo "Skipping baked pack $name (category '${cat:-uncategorized}' disabled via SEED_*_NODES)."
+            continue
+        fi
         dest="$CUSTOM_NODES_DIR/$name"
         if [ -e "$dest" ]; then
             continue

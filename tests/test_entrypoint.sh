@@ -232,4 +232,48 @@ assert_true '[ ! -d "$HF_CACHE_DIR/huggingface" ]' "default huggingface cache di
 assert_true '[ ! -d "$HF_CACHE_DIR/torch" ]'       "default torch cache dir NOT created when TORCH_HOME overridden"
 unset HF_HOME TORCH_HOME
 
+# --- Category-gated baked-node seeding: master SEED_BAKED_NODES + per-category SEED_*_NODES ---
+BAKED_NODES_DIR="$workdir/baked_cat"
+for p in TTS-Audio-Suite ComfyUI-WanVideoWrapper ComfyUI-VideoHelperSuite ComfyUI-Frame-Interpolation \
+         ComfyUI-KJNodes ComfyUI_essentials ComfyUI_HuggingFace_Downloader; do
+    mkdir -p "$BAKED_NODES_DIR/$p"; echo x > "$BAKED_NODES_DIR/$p/marker"
+done
+
+# Category mapping is correct.
+assert_eq "audio"  "$(baked_node_category TTS-Audio-Suite)"                "TTS-Audio-Suite -> audio"
+assert_eq "video"  "$(baked_node_category ComfyUI-WanVideoWrapper)"        "WanVideoWrapper -> video"
+assert_eq "video"  "$(baked_node_category ComfyUI-Frame-Interpolation)"    "Frame-Interpolation -> video"
+assert_eq "helper" "$(baked_node_category ComfyUI-KJNodes)"                "KJNodes -> helper"
+assert_eq "helper" "$(baked_node_category ComfyUI_HuggingFace_Downloader)" "HF Downloader -> helper"
+assert_eq ""       "$(baked_node_category SomeUnknownPack)"                "unknown pack -> uncategorized"
+
+# Default (all flags unset): every category seeds.
+CUSTOM_NODES_DIR="$workdir/cn_cat_all"; mkdir -p "$CUSTOM_NODES_DIR"
+( unset SEED_BAKED_NODES SEED_AUDIO_NODES SEED_VIDEO_NODES SEED_HELPER_NODES; seed_baked_nodes )
+assert_true '[ -d "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'         "default seeds the audio pack"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]' "default seeds a video pack"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-KJNodes" ]'         "default seeds a helper pack"
+
+# Master switch off: nothing seeds, even with category flags at default.
+CUSTOM_NODES_DIR="$workdir/cn_cat_off"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_BAKED_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'         "SEED_BAKED_NODES=0 seeds nothing (audio)"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]' "SEED_BAKED_NODES=0 seeds nothing (video)"
+
+# Video category off: video packs skipped; audio + helper still seed.
+CUSTOM_NODES_DIR="$workdir/cn_cat_novideo"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_VIDEO_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]'     "SEED_VIDEO_NODES=0 skips WanVideoWrapper"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-VideoHelperSuite" ]'    "SEED_VIDEO_NODES=0 skips VideoHelperSuite"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Frame-Interpolation" ]' "SEED_VIDEO_NODES=0 skips Frame-Interpolation"
+assert_true '[ -d "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'              "SEED_VIDEO_NODES=0 still seeds audio"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-KJNodes" ]'             "SEED_VIDEO_NODES=0 still seeds helper"
+
+# Audio category off: TTS skipped; video + helper still seed.
+CUSTOM_NODES_DIR="$workdir/cn_cat_noaudio"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_AUDIO_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'        "SEED_AUDIO_NODES=0 skips TTS-Audio-Suite"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]'  "SEED_AUDIO_NODES=0 still seeds video"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI_essentials" ]'       "SEED_AUDIO_NODES=0 still seeds helper"
+
 finish
