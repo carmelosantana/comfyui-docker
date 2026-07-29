@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased] — Ownership fork (carmelosantana)
+## v0.7.1 (July 29, 2026)
+
+- Fix seeded-pack ownership for packs that **already exist** in `custom_nodes`. The v0.7.0 chown
+  only ran on freshly-copied packs, so a pack seeded by an older (pre-chown) image kept its root
+  ownership on redeploy and Manager kept logging `unable to create file .git/.cnr-id`. Ownership is
+  now re-asserted on existing baked packs too (idempotent, metadata-only).
+- Add a persistent `PIP_CACHE_DIR` under the models mount. A container recreate resets the Python
+  env, so non-baked custom-node deps reinstall on the next boot; pip now reuses cached wheels
+  instead of re-downloading them. Wired into the entrypoint, all compose files, and `.env.example`.
+
+## v0.7.0 (July 29, 2026) — Ownership fork (carmelosantana)
 
 - Forked from lecode-official/comfyui-docker (MIT).
 - Ship ComfyUI-Manager v4+ and fix the custom_nodes Manager-shadowing bug.
