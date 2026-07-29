@@ -103,10 +103,11 @@ recreate.
 | `COMFYUI_PORT` | `8188` | Host port published to ComfyUI's `8188` |
 | `GPU_COUNT` | `1` | Number of GPUs reserved for the container |
 | `USER_ID` / `GROUP_ID` | `1000` | Host uid/gid that should own files in the mounts |
-| `MODELS_PATH` | `./data/models` (3090 sample: `/mnt/Data/ComfyUI/models`) | Models mount |
-| `CUSTOM_NODES_PATH` | `./data/custom_nodes` (3090: `/mnt/Data/ComfyUI/custom_nodes`) | Custom nodes mount |
+| `MODELS_PATH` | `./data/models` | Models mount (the 3090 sample sets its own host default) |
+| `CUSTOM_NODES_PATH` | `./data/custom_nodes` | Custom nodes mount |
 | `OUTPUT_PATH` | `./data/output` | Output mount |
 | `INPUT_PATH` | `./data/input` | Input mount |
+| `WORKFLOWS_PATH` | (3090 samples only) | Saved-workflows mount used by the 3090 sample stacks |
 | `PYTORCH_ALLOC_CONF` | unset | Set to `expandable_segments:True` on torch 2.9 |
 | `BOOTSTRAP_NODES` | unset | Set `1` to install the supported node packs on first boot |
 | `MANAGER_NETWORK_MODE` | `personal_cloud` | Manager v4 network mode, **enforced** into `user/__manager/config.ini` every boot. `personal_cloud` is **required** to unlock the install/model management API on a box that listens on `0.0.0.0` — Manager blocks those actions for `public`/`private`/`offline` on a non-loopback listen. Set to `public` to lock the box down when exposed publicly |
@@ -181,8 +182,8 @@ reversibly moves everything except `models input output custom_nodes user` into 
 backup folder. Dry-run first:
 
 ```bash
-sudo bash scripts/cleanup-legacy-comfyui.sh --dry-run /mnt/Data/ComfyUI
-sudo bash scripts/cleanup-legacy-comfyui.sh --apply   /mnt/Data/ComfyUI
+sudo bash scripts/cleanup-legacy-comfyui.sh --dry-run /path/to/ComfyUI
+sudo bash scripts/cleanup-legacy-comfyui.sh --apply   /path/to/ComfyUI
 ```
 
 ## Credits

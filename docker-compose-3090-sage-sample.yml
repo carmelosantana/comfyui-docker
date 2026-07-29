@@ -31,8 +31,8 @@ services:
       - ${MODELS_PATH:-/mnt/Data/ComfyUI/models}:/opt/comfyui/models:rw
       - ${CUSTOM_NODES_PATH:-/mnt/Data/ComfyUI/custom_nodes}:/opt/comfyui/custom_nodes:rw
       - ${OUTPUT_PATH:-/mnt/Data/ComfyUI/output}:/opt/comfyui/output:rw
-      - /mnt/Data/ComfyUI/input:/opt/comfyui/input:rw
-      - /mnt/Data/ComfyUI/user/default/workflows:/opt/comfyui/user/default/workflows:rw
+      - ${INPUT_PATH:-/mnt/Data/ComfyUI/input}:/opt/comfyui/input:rw
+      - ${WORKFLOWS_PATH:-/mnt/Data/ComfyUI/user/default/workflows}:/opt/comfyui/user/default/workflows:rw
     command:
       - "--reserve-vram"
       - "1"
