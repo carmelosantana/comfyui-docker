@@ -152,9 +152,22 @@ category_enabled() {
     esac
 }
 
+# Re-assert runtime-user ownership on a seeded baked pack. custom_nodes is in CHOWN_EXCLUDE (never
+# bulk-chowned) and seeding runs as root, so without this the pack lands/stays root-owned and the
+# runtime user can't write pack state (.git/.cnr-id, TTS caches) — Manager logs "unable to create
+# file" every boot. Numeric IDs work before useradd; the guard makes it a no-op in pure-root mode.
+# Idempotent (metadata-only), so it is safe to run on both freshly-copied and pre-existing packs.
+ensure_pack_owner() {
+    local dest="$1"
+    if [ -n "${USER_ID:-}" ] && [ -n "${GROUP_ID:-}" ]; then
+        chown -R "$USER_ID:$GROUP_ID" "$dest" 2>/dev/null || true
+    fi
+}
+
 # Copy the baked node packs from the (non-mounted) staging dir into the live custom_nodes mount.
 # Runs BEFORE bootstrap/requirements so their deps are considered on the same boot. Idempotent:
-# an existing dir (a user's own copy or a prior seed) is left untouched, never clobbered.
+# an existing dir (a user's own copy or a prior seed) is left untouched, never clobbered — but its
+# ownership IS re-asserted, so packs seeded by an older (pre-chown) image get repaired on redeploy.
 # On by default; SEED_BAKED_NODES=0 disables ALL seeding, and each SEED_{AUDIO,VIDEO,HELPER}_NODES=0
 # disables just that category. This is a local copy from the image — no git/network involved.
 seed_baked_nodes() {
@@ -175,17 +188,15 @@ seed_baked_nodes() {
         fi
         dest="$CUSTOM_NODES_DIR/$name"
         if [ -e "$dest" ]; then
+            # Present already (user's own copy or a prior seed). Don't clobber the tree, but DO
+            # repair ownership: a pack seeded by an older image predates the chown below and is
+            # still root-owned, which is exactly the .git/.cnr-id "unable to create file" case.
+            ensure_pack_owner "$dest"
             continue
         fi
         echo "Seeding baked node pack $name into custom_nodes..."
         cp -a "$src" "$dest"
-        # custom_nodes is in CHOWN_EXCLUDE (never bulk-chowned), and this cp runs as root, so the
-        # freshly-seeded pack lands root-owned — the runtime user then can't write pack state
-        # (.cnr-id, TTS caches). Chown just this newly-seeded tree to the runtime user. Numeric IDs
-        # work before useradd; the guard makes it a no-op in pure-root mode.
-        if [ -n "${USER_ID:-}" ] && [ -n "${GROUP_ID:-}" ]; then
-            chown -R "$USER_ID:$GROUP_ID" "$dest" 2>/dev/null || true
-        fi
+        ensure_pack_owner "$dest"
     done
 }
 
