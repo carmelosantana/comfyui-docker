@@ -46,23 +46,47 @@ assert_true '! echo "$chown_list" | grep -qx "$COMFYUI_DIR/output"' "does NOT ch
 assert_true '! echo "$chown_list" | grep -qx "$COMFYUI_DIR/input"' "does NOT chown the input mount"
 assert_true '! echo "$chown_list" | grep -qx "$COMFYUI_DIR/custom_nodes"' "does NOT chown the custom_nodes mount"
 
-# --- Task 5: node requirements install runs once (sentinel) ---
-CUSTOM_NODES_DIR="$workdir/cn"; mkdir -p "$CUSTOM_NODES_DIR/PackA"
+# --- Node deps: per-pack hash marker in an EPHEMERAL state dir; reinstalls after recreate ---
+CUSTOM_NODES_DIR="$workdir/cn2"; mkdir -p "$CUSTOM_NODES_DIR/PackA"
 echo "somepkg==1.0" > "$CUSTOM_NODES_DIR/PackA/requirements.txt"
+mkdir -p "$CUSTOM_NODES_DIR/PackB"; printf 'open("%s","w")\n' "$workdir/installpy.marker" > "$CUSTOM_NODES_DIR/PackB/install.py"
+NODE_DEPS_STATE_DIR="$workdir/state"          # ephemeral (NOT under the custom_nodes mount)
 pipbin="$workdir/bin"; mkdir -p "$pipbin"
-cat > "$pipbin/pip" <<'EOF'
+cat > "$pipbin/pip"    <<'EOF'
 #!/usr/bin/env bash
 echo "$@" >> "$PIP_LOG"
 EOF
-chmod +x "$pipbin/pip"
+cat > "$pipbin/python" <<'EOF'
+#!/usr/bin/env bash
+echo "$@" >> "$PY_LOG"
+EOF
+chmod +x "$pipbin/pip" "$pipbin/python"
 export PIP_LOG="$workdir/pip.log"; : > "$PIP_LOG"
+export PY_LOG="$workdir/py.log";   : > "$PY_LOG"
+
 PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
-assert_true '[ -f "$CUSTOM_NODES_DIR/.requirements-installed" ]' "sentinel written after first run"
-assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "PackA requirements installed once"
+assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "PackA reqs installed on first run"
+assert_eq "1" "$(grep -c 'install.py' "$PY_LOG")"              "PackB install.py run on first run"
+assert_true '[ -f "$NODE_DEPS_STATE_DIR/PackA.hash" ]'         "PackA hash marker written"
 PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
-assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "second unforced run is a no-op"
+assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "unchanged pack is a no-op second run"
+
+# Simulate container RECREATE: the ephemeral state dir is gone -> reinstall
+rm -rf "$NODE_DEPS_STATE_DIR"
+PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
+assert_eq "2" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "recreate (state wiped) reinstalls PackA"
+
 PATH="$pipbin:$PATH" FORCE_NODE_REQS="1" install_node_requirements
-assert_eq "2" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "FORCE_NODE_REQS reinstalls"
+assert_eq "3" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "FORCE_NODE_REQS reinstalls"
+
+# A failing pip must NOT crash the loop (resilience)
+cat > "$pipbin/pip" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$pipbin/pip"; rm -rf "$NODE_DEPS_STATE_DIR"
+PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements && rc=0 || rc=$?
+assert_eq "0" "$rc" "loop survives a failing pip install"
 
 # --- Manager config is ENFORCED every boot from env (default personal_cloud / normal) ---
 # NOTE: Manager v4 reads its config ONLY from get_system_user_directory("manager"),

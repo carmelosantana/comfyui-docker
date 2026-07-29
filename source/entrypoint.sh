@@ -6,6 +6,9 @@ COMFYUI_DIR="${COMFYUI_DIR:-/opt/comfyui}"
 MANAGER_SRC="${MANAGER_SRC:-/opt/comfyui-manager}"
 CUSTOM_NODES_DIR="${CUSTOM_NODES_DIR:-$COMFYUI_DIR/custom_nodes}"
 MANAGER_CONFIG_SRC="${MANAGER_CONFIG_SRC:-/opt/comfyui-manager-config.ini}"
+# Per-pack node-dep install markers. MUST live off the persistent custom_nodes mount so a
+# container recreate (fresh, ephemeral conda env) reinstalls; $COMFYUI_DIR is an image layer.
+NODE_DEPS_STATE_DIR="${NODE_DEPS_STATE_DIR:-$COMFYUI_DIR/.node-deps-state}"
 
 MODEL_DIRECTORIES=(
     checkpoints clip clip_vision configs controlnet diffusers diffusion_models
@@ -78,22 +81,31 @@ chown_app_dirs() {
 }
 
 install_node_requirements() {
-    local sentinel="$CUSTOM_NODES_DIR/.requirements-installed"
-    if [ -f "$sentinel" ] && [ "${FORCE_NODE_REQS:-}" != "1" ]; then
-        echo "Node requirements already installed (sentinel present); skipping."
-        return 0
-    fi
-    local dir name
+    mkdir -p "$NODE_DEPS_STATE_DIR"
+    local dir name reqs inst sig hashfile
     for dir in "$CUSTOM_NODES_DIR"/*; do
         [ -d "$dir" ] || continue
         name="$(basename "$dir")"
         [ "$name" = "ComfyUI-Manager" ] && continue
-        if [ -f "$dir/requirements.txt" ]; then
-            echo "Installing requirements for $name..."
-            pip install --requirement "$dir/requirements.txt" || true
+        reqs="$dir/requirements.txt"
+        inst="$dir/install.py"
+        [ -f "$reqs" ] || [ -f "$inst" ] || continue
+        # Content signature; changes when a pack's requirements or install.py change.
+        sig="$( { [ -f "$reqs" ] && cat "$reqs"; [ -f "$inst" ] && echo "install.py:$(wc -c < "$inst")"; true; } | sha256sum | cut -d' ' -f1)"
+        hashfile="$NODE_DEPS_STATE_DIR/$name.hash"
+        if [ "${FORCE_NODE_REQS:-}" != "1" ] && [ -f "$hashfile" ] && [ "$(cat "$hashfile")" = "$sig" ]; then
+            continue
         fi
+        if [ -f "$reqs" ]; then
+            echo "Installing requirements for $name..."
+            pip install --requirement "$reqs" || echo "WARN: requirements install failed for $name (continuing)"
+        fi
+        if [ -f "$inst" ]; then
+            echo "Running install.py for $name..."
+            ( cd "$dir" && python install.py ) || echo "WARN: install.py failed for $name (continuing)"
+        fi
+        echo "$sig" > "$hashfile"
     done
-    touch "$sentinel"
 }
 
 # Clone the supported node packs into custom_nodes when the user opts in with
