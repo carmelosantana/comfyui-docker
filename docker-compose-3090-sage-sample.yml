@@ -21,6 +21,10 @@ services:
       # to lock down if the box is ever exposed publicly.
       MANAGER_NETWORK_MODE: "${MANAGER_NETWORK_MODE:-personal_cloud}"
       MANAGER_SECURITY_LEVEL: "${MANAGER_SECURITY_LEVEL:-normal}"
+      # Lazy-download caches for model weights (TTS engines, HuggingFace, torch hub). Kept inside
+      # the models mount so first-use downloads survive a container recreate. Override to relocate.
+      HF_HOME: "${HF_HOME:-/opt/comfyui/models/.cache/huggingface}"
+      TORCH_HOME: "${TORCH_HOME:-/opt/comfyui/models/.cache/torch}"
     ports:
       - "8188:8188"
     volumes:
