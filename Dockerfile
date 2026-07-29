@@ -74,6 +74,9 @@ ARG KJNODES_REF=827fe6ee0ed7348d8daa988ed852bedf1272380c
 ARG FRAME_INTERP_REF=26545cc2dd95bc3d27f056016300673bdeee78f5
 ARG ESSENTIALS_REF=9d9f4bedfc9f0321c19faf71855e228c93bd0dc9
 ARG TTS_SUITE_REF=871c97fd9962fc7ffc2e0f6d9868bb5d5e6c5d46
+ARG WANVIDEO_REF=088128b224242e110d3906c6750e9a3a348a659b
+ARG VHS_REF=4ee72c065db22c9d96c2427954dc69e7b908444b
+ARG HF_DOWNLOADER_REF=2bba5db6a52479e8ad465dbade19dd0da0784bd3
 
 RUN mkdir -p /opt/comfyui-baked-nodes && cd /opt/comfyui-baked-nodes && \
     git clone https://github.com/kijai/ComfyUI-KJNodes.git ComfyUI-KJNodes && \
@@ -82,15 +85,25 @@ RUN mkdir -p /opt/comfyui-baked-nodes && cd /opt/comfyui-baked-nodes && \
     git -C ComfyUI-Frame-Interpolation checkout "${FRAME_INTERP_REF}" && \
     git clone https://github.com/cubiq/ComfyUI_essentials.git ComfyUI_essentials && \
     git -C ComfyUI_essentials checkout "${ESSENTIALS_REF}" && \
+    git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git ComfyUI-WanVideoWrapper && \
+    git -C ComfyUI-WanVideoWrapper checkout "${WANVIDEO_REF}" && \
+    git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git ComfyUI-VideoHelperSuite && \
+    git -C ComfyUI-VideoHelperSuite checkout "${VHS_REF}" && \
+    git clone https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader.git ComfyUI_HuggingFace_Downloader && \
+    git -C ComfyUI_HuggingFace_Downloader checkout "${HF_DOWNLOADER_REF}" && \
     git clone https://github.com/diodiogod/TTS-Audio-Suite.git TTS-Audio-Suite && \
     git -C TTS-Audio-Suite checkout "${TTS_SUITE_REF}"
 
-# KJNodes / essentials / Frame-Interpolation install cleanly with plain pip. Frame-Interpolation
-# uses the no-cupy requirements (RIFE works without cupy; cupy-wheel pulls a heavy CUDA runtime).
+# The video/helper/downloader packs install cleanly with plain pip (mostly wheels; several deps are
+# already present from the heavy-deps layer above). Frame-Interpolation uses the no-cupy requirements
+# (RIFE works without cupy; cupy-wheel pulls a heavy CUDA runtime).
 RUN pip install --no-cache-dir \
         -r /opt/comfyui-baked-nodes/ComfyUI-KJNodes/requirements.txt \
         -r /opt/comfyui-baked-nodes/ComfyUI_essentials/requirements.txt \
-        -r /opt/comfyui-baked-nodes/ComfyUI-Frame-Interpolation/requirements-no-cupy.txt
+        -r /opt/comfyui-baked-nodes/ComfyUI-Frame-Interpolation/requirements-no-cupy.txt \
+        -r /opt/comfyui-baked-nodes/ComfyUI-WanVideoWrapper/requirements.txt \
+        -r /opt/comfyui-baked-nodes/ComfyUI-VideoHelperSuite/requirements.txt \
+        -r /opt/comfyui-baked-nodes/ComfyUI_HuggingFace_Downloader/requirements.txt
 
 # TTS-Audio-Suite's requirements.txt explicitly defers to install.py for conflict resolution
 # (--no-deps installs, numpy/opencv pinning, engine bundling). Install the safe requirements first,
