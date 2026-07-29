@@ -1,7 +1,14 @@
-# ComfyUI node packs the image supports installing cleanly.
+# EXTRA node packs to git-clone into custom_nodes on first boot when BOOTSTRAP_NODES=1.
 # Format: <git-url> [<git-ref>]   (ref optional; blank = default branch)
-https://github.com/kijai/ComfyUI-WanVideoWrapper
-https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite
-# Now baked into the image; bootstrap skips it if already present in custom_nodes.
-https://github.com/diodiogod/TTS-Audio-Suite
-https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader
+#
+# NOTE: the core creator packs below are now BAKED into the image and seeded automatically
+# (see the README "What's baked into the image" + the SEED_*_NODES flags) — you do NOT need
+# BOOTSTRAP_NODES for them. They are listed here (commented out) only for reference; a runtime
+# clone would be skipped anyway because the baked copy already exists in custom_nodes.
+#
+#   https://github.com/kijai/ComfyUI-WanVideoWrapper        (baked: SEED_VIDEO_NODES)
+#   https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite (baked: SEED_VIDEO_NODES)
+#   https://github.com/diodiogod/TTS-Audio-Suite             (baked: SEED_AUDIO_NODES)
+#   https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader  (baked: SEED_HELPER_NODES)
+#
+# Add your own extra packs below, one git URL per line, then set BOOTSTRAP_NODES=1:
