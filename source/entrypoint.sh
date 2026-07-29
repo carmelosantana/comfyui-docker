@@ -9,6 +9,9 @@ MANAGER_CONFIG_SRC="${MANAGER_CONFIG_SRC:-/opt/comfyui-manager-config.ini}"
 # Per-pack node-dep install markers. MUST live off the persistent custom_nodes mount so a
 # container recreate (fresh, ephemeral conda env) reinstalls; $COMFYUI_DIR is an image layer.
 NODE_DEPS_STATE_DIR="${NODE_DEPS_STATE_DIR:-$COMFYUI_DIR/.node-deps-state}"
+# Baked node packs staged OUTSIDE the custom_nodes bind mount (which would shadow them). Seeded
+# into the live mount on boot so a fresh/scratch custom_nodes dir still gets the shipped packs.
+BAKED_NODES_DIR="${BAKED_NODES_DIR:-/opt/comfyui-baked-nodes}"
 
 MODEL_DIRECTORIES=(
     checkpoints clip clip_vision configs controlnet diffusers diffusion_models
@@ -80,6 +83,14 @@ chown_app_dirs() {
     find "$COMFYUI_DIR" -maxdepth 1 -type f -exec chown "$uid:$gid" {} + 2>/dev/null || true
 }
 
+# Content signature for a node pack's dependency inputs. Changes when requirements.txt or
+# install.py change, so the on-boot installer re-runs only when a pack's deps actually changed.
+node_dep_signature() {
+    local dir="$1" reqs="$1/requirements.txt" inst="$1/install.py"
+    { [ -f "$reqs" ] && cat "$reqs"; [ -f "$inst" ] && echo "install.py:$(wc -c < "$inst")"; true; } \
+        | sha256sum | cut -d' ' -f1
+}
+
 install_node_requirements() {
     mkdir -p "$NODE_DEPS_STATE_DIR"
     local dir name reqs inst sig hashfile
@@ -91,7 +102,7 @@ install_node_requirements() {
         inst="$dir/install.py"
         [ -f "$reqs" ] || [ -f "$inst" ] || continue
         # Content signature; changes when a pack's requirements or install.py change.
-        sig="$( { [ -f "$reqs" ] && cat "$reqs"; [ -f "$inst" ] && echo "install.py:$(wc -c < "$inst")"; true; } | sha256sum | cut -d' ' -f1)"
+        sig="$(node_dep_signature "$dir")"
         hashfile="$NODE_DEPS_STATE_DIR/$name.hash"
         if [ "${FORCE_NODE_REQS:-}" != "1" ] && [ -f "$hashfile" ] && [ "$(cat "$hashfile")" = "$sig" ]; then
             continue
@@ -105,6 +116,25 @@ install_node_requirements() {
             ( cd "$dir" && python install.py ) || echo "WARN: install.py failed for $name (continuing)"
         fi
         echo "$sig" > "$hashfile"
+    done
+}
+
+# Copy the baked node packs from the (non-mounted) staging dir into the live custom_nodes mount.
+# Runs BEFORE bootstrap/requirements so their deps are considered on the same boot. Idempotent:
+# an existing dir (a user's own copy or a prior seed) is left untouched, never clobbered.
+seed_baked_nodes() {
+    [ -d "$BAKED_NODES_DIR" ] || return 0
+    mkdir -p "$CUSTOM_NODES_DIR"
+    local src name dest
+    for src in "$BAKED_NODES_DIR"/*; do
+        [ -d "$src" ] || continue
+        name="$(basename "$src")"
+        dest="$CUSTOM_NODES_DIR/$name"
+        if [ -e "$dest" ]; then
+            continue
+        fi
+        echo "Seeding baked node pack $name into custom_nodes..."
+        cp -a "$src" "$dest"
     done
 }
 
@@ -189,6 +219,8 @@ main() {
     remove_stale_manager
     echo "Seeding Manager config (if absent)..."
     seed_manager_config
+    echo "Seeding baked node packs into custom_nodes..."
+    seed_baked_nodes
     echo "Bootstrapping node packs (if opted in)..."
     maybe_bootstrap_nodes
     echo "Installing custom-node requirements (once)..."

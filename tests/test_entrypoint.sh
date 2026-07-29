@@ -164,4 +164,30 @@ assert_eq "--use-sage-attention" "$out" "toggle on, no args: exactly the sage fl
 out="$( USE_SAGE_ATTENTION=0 apply_sage_attention --cpu )"
 assert_true '! printf "%s" "$out" | grep -q -- "--use-sage-attention"' "USE_SAGE_ATTENTION=0 is off"
 
+# --- Task 1: seed_baked_nodes copies baked packs into custom_nodes, never clobbering ---
+BAKED_NODES_DIR="$workdir/baked"; mkdir -p "$BAKED_NODES_DIR/PackX" "$BAKED_NODES_DIR/PackY"
+echo "req" > "$BAKED_NODES_DIR/PackX/requirements.txt"
+echo "code" > "$BAKED_NODES_DIR/PackY/node.py"
+CUSTOM_NODES_DIR="$workdir/cn_seed"; mkdir -p "$CUSTOM_NODES_DIR/PackY"
+echo "USER-EDIT" > "$CUSTOM_NODES_DIR/PackY/node.py"   # pre-existing user copy must win
+seed_baked_nodes
+assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "seeds a baked pack that is absent"
+assert_eq "USER-EDIT" "$(cat "$CUSTOM_NODES_DIR/PackY/node.py")" "does NOT clobber an existing pack"
+
+# Idempotent second run makes no change and does not error.
+seed_baked_nodes
+assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "second seed run is idempotent"
+
+# Absent baked dir is a safe no-op.
+( BAKED_NODES_DIR="$workdir/nope"; seed_baked_nodes ) && rc=0 || rc=$?
+assert_eq "0" "$rc" "seed_baked_nodes no-ops when baked dir is absent"
+
+# node_dep_signature is stable and content-sensitive.
+sigdir="$workdir/sigp"; mkdir -p "$sigdir"; echo "a==1" > "$sigdir/requirements.txt"
+s1="$(node_dep_signature "$sigdir")"
+s2="$(node_dep_signature "$sigdir")"
+assert_eq "$s1" "$s2" "node_dep_signature is stable for unchanged content"
+echo "a==2" > "$sigdir/requirements.txt"
+assert_true '[ "$(node_dep_signature "$sigdir")" != "$s1" ]' "node_dep_signature changes when requirements change"
+
 finish
