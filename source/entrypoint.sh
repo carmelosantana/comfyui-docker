@@ -164,13 +164,13 @@ seed_baked_nodes() {
     fi
     [ -d "$BAKED_NODES_DIR" ] || return 0
     mkdir -p "$CUSTOM_NODES_DIR"
-    local src name dest cat
+    local src name dest pack_cat
     for src in "$BAKED_NODES_DIR"/*; do
         [ -d "$src" ] || continue
         name="$(basename "$src")"
-        cat="$(baked_node_category "$name")"
-        if ! category_enabled "$cat"; then
-            echo "Skipping baked pack $name (category '${cat:-uncategorized}' disabled via SEED_*_NODES)."
+        pack_cat="$(baked_node_category "$name")"
+        if ! category_enabled "$pack_cat"; then
+            echo "Skipping baked pack $name (category '${pack_cat:-uncategorized}' disabled via SEED_*_NODES)."
             continue
         fi
         dest="$CUSTOM_NODES_DIR/$name"
