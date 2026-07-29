@@ -190,4 +190,33 @@ assert_eq "$s1" "$s2" "node_dep_signature is stable for unchanged content"
 echo "a==2" > "$sigdir/requirements.txt"
 assert_true '[ "$(node_dep_signature "$sigdir")" != "$s1" ]' "node_dep_signature changes when requirements change"
 
+# --- Task 2: write_baked_node_markers pre-seeds markers so the on-boot loop skips baked packs ---
+BAKED_NODES_DIR="$workdir/baked2"; mkdir -p "$BAKED_NODES_DIR/PackReq" "$BAKED_NODES_DIR/PackNone"
+echo "dep==1" > "$BAKED_NODES_DIR/PackReq/requirements.txt"
+echo "noop"   > "$BAKED_NODES_DIR/PackNone/readme.txt"   # no reqs/install.py -> no marker
+NODE_DEPS_STATE_DIR="$workdir/state2"
+write_baked_node_markers
+assert_true '[ -f "$NODE_DEPS_STATE_DIR/PackReq.hash" ]'   "marker written for a pack with requirements"
+assert_true '[ ! -f "$NODE_DEPS_STATE_DIR/PackNone.hash" ]' "no marker for a pack without dep inputs"
+assert_eq "$(node_dep_signature "$BAKED_NODES_DIR/PackReq")" "$(cat "$NODE_DEPS_STATE_DIR/PackReq.hash")" \
+    "marker equals the pack signature (loop will treat it as satisfied)"
+
+# The seeded pack + pre-seeded marker => install_node_requirements SKIPS it (no pip/python calls).
+CUSTOM_NODES_DIR="$workdir/cn_skip"; mkdir -p "$CUSTOM_NODES_DIR"
+cp -a "$BAKED_NODES_DIR/PackReq" "$CUSTOM_NODES_DIR/PackReq"
+skipbin="$workdir/skipbin"; mkdir -p "$skipbin"
+printf '#!/usr/bin/env bash\necho called >> "%s"\n' "$workdir/skip.log" > "$skipbin/pip"
+cp "$skipbin/pip" "$skipbin/python"; chmod +x "$skipbin/pip" "$skipbin/python"
+: > "$workdir/skip.log"
+PATH="$skipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
+assert_eq "0" "$(grep -c called "$workdir/skip.log" 2>/dev/null)" \
+    "baked pack with pre-seeded marker is skipped by the on-boot loop"
+
+# --- Task 2: create_cache_dirs makes the persistent HF/torch cache under the models mount ---
+COMFYUI_DIR="$workdir/opt2/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
+mkdir -p "$COMFYUI_DIR"
+create_cache_dirs
+assert_true '[ -d "$HF_CACHE_DIR/huggingface" ]' "huggingface cache dir created under models mount"
+assert_true '[ -d "$HF_CACHE_DIR/torch" ]'       "torch cache dir created under models mount"
+
 finish

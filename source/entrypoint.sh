@@ -12,6 +12,9 @@ NODE_DEPS_STATE_DIR="${NODE_DEPS_STATE_DIR:-$COMFYUI_DIR/.node-deps-state}"
 # Baked node packs staged OUTSIDE the custom_nodes bind mount (which would shadow them). Seeded
 # into the live mount on boot so a fresh/scratch custom_nodes dir still gets the shipped packs.
 BAKED_NODES_DIR="${BAKED_NODES_DIR:-/opt/comfyui-baked-nodes}"
+# Persistent lazy-download cache for model weights (TTS engines, HF hub, torch hub). Lives UNDER the
+# models bind mount so first-use downloads survive a container recreate without a new volume.
+HF_CACHE_DIR="${HF_CACHE_DIR:-$COMFYUI_DIR/models/.cache}"
 
 MODEL_DIRECTORIES=(
     checkpoints clip clip_vision configs controlnet diffusers diffusion_models
@@ -78,6 +81,10 @@ chown_app_dirs() {
     # its snapshots/startup-scripts/cache/batch_history subdirs on start. It is small and ours.
     [ -e "$COMFYUI_DIR/user/__manager" ] && \
         chown --recursive "$uid:$gid" "$COMFYUI_DIR/user/__manager" 2>/dev/null || true
+    # The lazy-download cache lives under the (excluded) models mount; the runtime user must own it
+    # recursively so HF/torch can write weights there on first use.
+    [ -e "$HF_CACHE_DIR" ] && \
+        chown --recursive "$uid:$gid" "$HF_CACHE_DIR" 2>/dev/null || true
     # Shallow chown of the app root and its top-level files (not the mounts within).
     chown "$uid:$gid" "$COMFYUI_DIR" 2>/dev/null || true
     find "$COMFYUI_DIR" -maxdepth 1 -type f -exec chown "$uid:$gid" {} + 2>/dev/null || true
@@ -136,6 +143,27 @@ seed_baked_nodes() {
         echo "Seeding baked node pack $name into custom_nodes..."
         cp -a "$src" "$dest"
     done
+}
+
+# Pre-seed on-boot node-dep markers for the baked packs (run at BUILD time). Their Python deps are
+# baked into the image, so the on-boot install loop should treat them as already satisfied and skip
+# the (heavy) reinstall on every boot/recreate. Markers live in the image layer, so they persist.
+write_baked_node_markers() {
+    [ -d "$BAKED_NODES_DIR" ] || return 0
+    mkdir -p "$NODE_DEPS_STATE_DIR"
+    local src name
+    for src in "$BAKED_NODES_DIR"/*; do
+        [ -d "$src" ] || continue
+        name="$(basename "$src")"
+        [ -f "$src/requirements.txt" ] || [ -f "$src/install.py" ] || continue
+        node_dep_signature "$src" > "$NODE_DEPS_STATE_DIR/$name.hash"
+    done
+}
+
+# Create the persistent lazy-download cache dirs under the models mount. Env HF_HOME/TORCH_HOME
+# (set in the Dockerfile) point here, so engine/HF weights land on a bind mount and survive recreate.
+create_cache_dirs() {
+    mkdir -p "$HF_CACHE_DIR/huggingface" "$HF_CACHE_DIR/torch"
 }
 
 # Clone the supported node packs into custom_nodes when the user opts in with
@@ -215,6 +243,8 @@ apply_sage_attention() {
 main() {
     echo "Creating model directories..."
     create_model_dirs
+    echo "Creating persistent model/HF cache directories..."
+    create_cache_dirs
     echo "Removing any stale v3 ComfyUI Manager from custom_nodes..."
     remove_stale_manager
     echo "Seeding Manager config (if absent)..."
