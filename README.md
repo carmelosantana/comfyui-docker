@@ -65,8 +65,8 @@ recreate.
 | `INPUT_PATH` | `./data/input` | Input mount |
 | `PYTORCH_ALLOC_CONF` | unset | Set to `expandable_segments:True` on torch 2.9 |
 | `BOOTSTRAP_NODES` | unset | Set `1` to install the supported node packs on first boot |
-| `MANAGER_SECURITY_LEVEL` | `weak` | Manager security level written to `user/__manager/config.ini`. `weak` is what lets the MCP do arbitrary-URL model + node-pack installs (clears the v3.x `405`/`500`); raise it (`normal`/`normal-`/`strong`) to lock those down. Applied only when the config is first seeded — to change it later, edit `user/__manager/config.ini` directly (or delete it to re-seed from the env var) |
-| `MANAGER_NETWORK_MODE` | `public` | Manager network mode written to `user/__manager/config.ini` |
+| `MANAGER_NETWORK_MODE` | `personal_cloud` | Manager v4 network mode, **enforced** into `user/__manager/config.ini` every boot. `personal_cloud` is **required** to unlock the install/model management API on a box that listens on `0.0.0.0` — Manager blocks those actions for `public`/`private`/`offline` on a non-loopback listen. Set to `public` to lock the box down when exposed publicly |
+| `MANAGER_SECURITY_LEVEL` | `normal` | Manager v4 security level, enforced into `user/__manager/config.ini` every boot. `normal` is the least-permissive level that still allows arbitrary git-URL node installs and arbitrary-URL model downloads via the API; `strong` blocks them |
 | `USE_SAGE_ATTENTION` | `1` in `-sage` images, else unset | On the `-sage` image, appends `--use-sage-attention` (and drops `--use-pytorch-cross-attention`). Set `0` to disable. No effect on the base image |
 
 ## Updating
@@ -82,6 +82,28 @@ recreate.
 Set `BOOTSTRAP_NODES=1` (or run `/opt/scripts/bootstrap-nodes.sh` inside the container) to clone
 WanVideoWrapper, VideoHelperSuite, TTS-Audio-Suite, and the HuggingFace Downloader into the
 mounted `custom_nodes`. Edit `scripts/node-manifest.txt` to add your own.
+
+## Custom-node Python dependencies
+
+The image bakes the heavy deps many video/vision packs need — `accelerate`,
+`opencv-python-headless` (cv2), `transformers`, `deepdiff`, `ollama` — plus a system **`ffmpeg`**
+on `PATH` (VideoHelperSuite shells out to it). On every boot the entrypoint also runs
+`pip install -r requirements.txt` and `install.py` for each pack in `custom_nodes`, keyed on a
+content hash stored **off** the persistent mount (`$COMFYUI_DIR/.node-deps-state`) — so deps are
+reinstalled into the fresh conda env after a `docker compose down && up` (the env is not a mount).
+A pack whose install fails logs a warning and never crashes boot. Force a reinstall with
+`FORCE_NODE_REQS=1`.
+
+## ComfyUI-MCP / Manager management API
+
+The Manager v4 install/model API needs `network_mode = personal_cloud` (the default here) —
+**not** `public` or `private` — because the container listens on `0.0.0.0` (non-loopback); Manager
+blocks those actions in any other mode. The config is enforced into `user/__manager/config.ini`
+before ComfyUI starts (Manager caches it on first read), so redeploying corrects a stale value.
+
+If a client gets **`405 Method Not Allowed` on `/v2/manager/queue/start`**, that is a *client* bug,
+not an image one: that route is **GET-only**. The correct v4 flow is `POST /v2/manager/queue/task`
+(kind `install`/`install_model`) then `GET /v2/manager/queue/start`.
 
 ## SageAttention build (`-sage` tags)
 

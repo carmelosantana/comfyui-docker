@@ -16,6 +16,11 @@ services:
       GROUP_ID: "${GROUP_ID:-1000}"
       PYTORCH_ALLOC_CONF: "expandable_segments:True"
       USE_SAGE_ATTENTION: "${USE_SAGE_ATTENTION:-1}"
+      # ComfyUI-Manager v4 API posture (enforced into config.ini each boot). personal_cloud+normal
+      # unlocks node/model installs for ComfyUI-MCP on this 0.0.0.0 LAN box; set network_mode=public
+      # to lock down if the box is ever exposed publicly.
+      MANAGER_NETWORK_MODE: "${MANAGER_NETWORK_MODE:-personal_cloud}"
+      MANAGER_SECURITY_LEVEL: "${MANAGER_SECURITY_LEVEL:-normal}"
     ports:
       - "8188:8188"
     volumes:

@@ -8,6 +8,11 @@ services:
     environment:
       USER_ID: "${USER_ID:-1000}"
       GROUP_ID: "${GROUP_ID:-1000}"
+      # ComfyUI-Manager v4 API posture (enforced into config.ini each boot). personal_cloud+normal
+      # unlocks node/model installs for ComfyUI-MCP on a 0.0.0.0 LAN box; set network_mode=public
+      # to lock down when the box is exposed publicly.
+      MANAGER_NETWORK_MODE: "${MANAGER_NETWORK_MODE:-personal_cloud}"
+      MANAGER_SECURITY_LEVEL: "${MANAGER_SECURITY_LEVEL:-normal}"
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
     volumes:
