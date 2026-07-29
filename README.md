@@ -34,6 +34,46 @@ This fork fixes that, and adds runtime defaults and version pinning on top. What
 - **Drop-in replacement.** It keeps lecode's environment-variable interface unchanged, so
   migrating is just swapping the image and redeploying — no compose rewrite.
 
+## What's baked into the image
+
+**Baked in (always seeded into `custom_nodes` on every boot — your own edits are never
+overwritten; seeding is idempotent and skips any dir that already exists):**
+
+| Pack | Purpose |
+| --- | --- |
+| [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) v4 | Node/model management API (used by [ComfyUI-MCP](https://github.com/artokun/comfyui-mcp)). Activated as a `pip` package + `--enable-manager`, **not** seeded as a `custom_nodes` directory — see [Why this fork?](#why-this-fork) |
+| [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | Helper nodes (resize/mask/get-set) the Wan graphs need |
+| [ComfyUI-Frame-Interpolation](https://github.com/Fannovel16/ComfyUI-Frame-Interpolation) | RIFE / GIMM-VFI frame interpolation for smooth / 60fps output |
+| [ComfyUI_essentials](https://github.com/cubiq/ComfyUI_essentials) | Common utility nodes many community workflows depend on |
+| [TTS-Audio-Suite](https://github.com/diodiogod/TTS-Audio-Suite) | TTS / voice-clone engines: ChatterBox, IndexTTS-2, F5-TTS, VibeVoice, Higgs Audio, CosyVoice3, RVC |
+
+**Available via opt-in bootstrap only** (`BOOTSTRAP_NODES=1`, or run
+`/opt/scripts/bootstrap-nodes.sh` inside the container; cloned into `custom_nodes` on first boot,
+**not** baked into the image — see [`scripts/node-manifest.txt`](scripts/node-manifest.txt)):
+
+| Pack | Purpose |
+| --- | --- |
+| [ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) | Wan2.x video generation (S2V / InfiniteTalk) |
+| [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | Video load/combine/encode (needs ffmpeg) |
+| [ComfyUI_HuggingFace_Downloader](https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader) | In-graph HuggingFace model downloads |
+
+> Any custom_nodes you drop into the mount — baked, bootstrapped, or your own — get their
+> `requirements.txt` (and `install.py`) auto-installed on the next boot, keyed on a content hash
+> so it only reinstalls when a pack's deps actually change (`FORCE_NODE_REQS=1` to force it).
+
+**System tools (apt):** `ffmpeg` (VideoHelperSuite decode/encode — `ffmpeg -version` works
+in-container), `git`, `aria2` (fast model downloads), `espeak-ng` (phonemizer for TTS), plus the
+`libgl1`/`libgl1-mesa-glx`/`libglib2.0-0` libraries OpenCV needs.
+
+**Python (baked into the conda env, so they survive a container recreate):** `accelerate`,
+`transformers`, `opencv-python-headless`, `imageio-ffmpeg`, `deepdiff`, `ollama`, `onnxruntime`,
+`huggingface_hub[cli]`, plus everything TTS-Audio-Suite and Frame-Interpolation require. SageAttention
+stays available on the `-sage` tags (compiled from pinned upstream source, not a prebuilt wheel).
+
+**Model weights are NOT baked** (keeps the image lean): TTS engines and other packs lazy-download
+their weights on first use into `HF_HOME`/`TORCH_HOME`, which default to `models/.cache/…` inside
+the persistent `models` mount — so first-use downloads survive `docker compose down && up`.
+
 ## Quick start (generic)
 
 ```bash
@@ -80,8 +120,9 @@ recreate.
 ## Installing the video/audio node packs
 
 Set `BOOTSTRAP_NODES=1` (or run `/opt/scripts/bootstrap-nodes.sh` inside the container) to clone
-WanVideoWrapper, VideoHelperSuite, TTS-Audio-Suite, and the HuggingFace Downloader into the
-mounted `custom_nodes`. Edit `scripts/node-manifest.txt` to add your own.
+WanVideoWrapper, VideoHelperSuite, and the HuggingFace Downloader into the mounted
+`custom_nodes` (see [What's baked into the image](#whats-baked-into-the-image) for what's already
+baked in vs. opt-in). Edit `scripts/node-manifest.txt` to add your own.
 
 ## Custom-node Python dependencies
 
