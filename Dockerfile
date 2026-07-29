@@ -30,7 +30,8 @@ RUN apt-get update --assume-yes && \
         ffmpeg \
         build-essential \
         cmake \
-        pkg-config && \
+        pkg-config \
+        portaudio19-dev && \
     rm -rf /var/cache/apt/archives /var/lib/apt/lists/*
 
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git /opt/comfyui && \
