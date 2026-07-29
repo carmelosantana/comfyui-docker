@@ -182,6 +182,26 @@ assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "second seed run
 ( BAKED_NODES_DIR="$workdir/nope"; seed_baked_nodes ) && rc=0 || rc=$?
 assert_eq "0" "$rc" "seed_baked_nodes no-ops when baked dir is absent"
 
+# Seeding still copies with USER_ID/GROUP_ID set — the chown branch runs (guarded `|| true`, so a
+# non-root harness where chown fails does not break the copy). Real ownership is verified on boot.
+CUSTOM_NODES_DIR="$workdir/cn_own"; mkdir -p "$CUSTOM_NODES_DIR"
+( USER_ID=1000 GROUP_ID=1000; seed_baked_nodes ) && rc=0 || rc=$?
+assert_eq "0" "$rc" "seed_baked_nodes succeeds with USER_ID/GROUP_ID set (chown branch)"
+assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "seeds pack when USER_ID/GROUP_ID set"
+
+# A pack that ALREADY exists (e.g. seeded by an older, pre-chown image) still has its ownership
+# re-asserted on redeploy: the existing tree is preserved (not clobbered) AND the chown branch runs
+# without error. This is the fix for stale root-owned packs left by earlier images.
+CUSTOM_NODES_DIR="$workdir/cn_own_existing"; mkdir -p "$CUSTOM_NODES_DIR/PackX"
+echo "PRE-EXISTING" > "$CUSTOM_NODES_DIR/PackX/requirements.txt"
+( USER_ID=1000 GROUP_ID=1000; seed_baked_nodes ) && rc=0 || rc=$?
+assert_eq "0" "$rc" "seed_baked_nodes re-asserts ownership on an existing pack without error"
+assert_eq "PRE-EXISTING" "$(cat "$CUSTOM_NODES_DIR/PackX/requirements.txt")" "existing pack is NOT clobbered while ownership is repaired"
+
+# ensure_pack_owner is a no-op (no error) in pure-root mode when USER_ID/GROUP_ID are unset.
+( unset USER_ID GROUP_ID; ensure_pack_owner "$CUSTOM_NODES_DIR/PackX" ) && rc=0 || rc=$?
+assert_eq "0" "$rc" "ensure_pack_owner no-ops without USER_ID/GROUP_ID (pure-root mode)"
+
 # node_dep_signature is stable and content-sensitive.
 sigdir="$workdir/sigp"; mkdir -p "$sigdir"; echo "a==1" > "$sigdir/requirements.txt"
 s1="$(node_dep_signature "$sigdir")"
@@ -216,9 +236,17 @@ assert_eq "0" "$(grep -c called "$workdir/skip.log" 2>/dev/null)" \
 COMFYUI_DIR="$workdir/opt2/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
 unset HF_HOME TORCH_HOME
 mkdir -p "$COMFYUI_DIR"
+unset PIP_CACHE_DIR
 create_cache_dirs
 assert_true '[ -d "$HF_CACHE_DIR/huggingface" ]' "huggingface cache dir created under models mount"
 assert_true '[ -d "$HF_CACHE_DIR/torch" ]'       "torch cache dir created under models mount"
+assert_true '[ -d "$HF_CACHE_DIR/pip" ]'         "pip cache dir created under models mount (persistent pip cache)"
+
+# PIP_CACHE_DIR override is honored (independent of HF_CACHE_DIR).
+COMFYUI_DIR="$workdir/opt_pip/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"; mkdir -p "$COMFYUI_DIR"
+PIP_CACHE_DIR="$workdir/custom-pip-cache" create_cache_dirs
+assert_true '[ -d "$workdir/custom-pip-cache" ]'   "custom PIP_CACHE_DIR created when overridden"
+assert_true '[ ! -d "$HF_CACHE_DIR/pip" ]'         "default pip cache dir NOT created when PIP_CACHE_DIR overridden"
 
 # --- create_cache_dirs honors HF_HOME/TORCH_HOME overrides (independent of HF_CACHE_DIR) ---
 COMFYUI_DIR="$workdir/opt3/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"

@@ -23,6 +23,10 @@ services:
       # the models mount so first-use downloads survive a container recreate. Override to relocate.
       HF_HOME: "${HF_HOME:-/opt/comfyui/models/.cache/huggingface}"
       TORCH_HOME: "${TORCH_HOME:-/opt/comfyui/models/.cache/torch}"
+      # Persistent pip cache (under the models mount). A container recreate resets the Python env, so
+      # non-baked packs' deps reinstall on boot; this cache means pip reuses wheels instead of
+      # re-downloading them each time. Override to relocate.
+      PIP_CACHE_DIR: "${PIP_CACHE_DIR:-/opt/comfyui/models/.cache/pip}"
       # Baked node packs are seeded into custom_nodes on boot, ON BY DEFAULT. Set SEED_BAKED_NODES=0
       # to disable all seeding, or a category flag to 0 to skip just that group (audio=TTS,
       # video=Wan/VideoHelper/Frame-Interpolation, helper=KJNodes/essentials/HF-Downloader).

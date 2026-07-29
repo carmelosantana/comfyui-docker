@@ -85,7 +85,8 @@ chown_app_dirs() {
     # user, so weights it downloads are already user-owned; only the root-created cache root dirs
     # need fixing. Shallow-chown just those — never recurse (the cache grows to many GB).
     local cachedir
-    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"; do
+    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
+                    "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"; do
         [ -e "$cachedir" ] && chown "$uid:$gid" "$cachedir" 2>/dev/null || true
     done
     # Shallow chown of the app root and its top-level files (not the mounts within).
@@ -152,9 +153,22 @@ category_enabled() {
     esac
 }
 
+# Re-assert runtime-user ownership on a seeded baked pack. custom_nodes is in CHOWN_EXCLUDE (never
+# bulk-chowned) and seeding runs as root, so without this the pack lands/stays root-owned and the
+# runtime user can't write pack state (.git/.cnr-id, TTS caches) — Manager logs "unable to create
+# file" every boot. Numeric IDs work before useradd; the guard makes it a no-op in pure-root mode.
+# Idempotent (metadata-only), so it is safe to run on both freshly-copied and pre-existing packs.
+ensure_pack_owner() {
+    local dest="$1"
+    if [ -n "${USER_ID:-}" ] && [ -n "${GROUP_ID:-}" ]; then
+        chown -R "$USER_ID:$GROUP_ID" "$dest" 2>/dev/null || true
+    fi
+}
+
 # Copy the baked node packs from the (non-mounted) staging dir into the live custom_nodes mount.
 # Runs BEFORE bootstrap/requirements so their deps are considered on the same boot. Idempotent:
-# an existing dir (a user's own copy or a prior seed) is left untouched, never clobbered.
+# an existing dir (a user's own copy or a prior seed) is left untouched, never clobbered — but its
+# ownership IS re-asserted, so packs seeded by an older (pre-chown) image get repaired on redeploy.
 # On by default; SEED_BAKED_NODES=0 disables ALL seeding, and each SEED_{AUDIO,VIDEO,HELPER}_NODES=0
 # disables just that category. This is a local copy from the image — no git/network involved.
 seed_baked_nodes() {
@@ -175,10 +189,15 @@ seed_baked_nodes() {
         fi
         dest="$CUSTOM_NODES_DIR/$name"
         if [ -e "$dest" ]; then
+            # Present already (user's own copy or a prior seed). Don't clobber the tree, but DO
+            # repair ownership: a pack seeded by an older image predates the chown below and is
+            # still root-owned, which is exactly the .git/.cnr-id "unable to create file" case.
+            ensure_pack_owner "$dest"
             continue
         fi
         echo "Seeding baked node pack $name into custom_nodes..."
         cp -a "$src" "$dest"
+        ensure_pack_owner "$dest"
     done
 }
 
@@ -200,7 +219,8 @@ write_baked_node_markers() {
 # Create the persistent lazy-download cache dirs under the models mount. Env HF_HOME/TORCH_HOME
 # (set in the Dockerfile) point here, so engine/HF weights land on a bind mount and survive recreate.
 create_cache_dirs() {
-    mkdir -p "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"
+    mkdir -p "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
+             "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"
 }
 
 # Clone the supported node packs into custom_nodes when the user opts in with
@@ -282,6 +302,10 @@ main() {
     create_model_dirs
     echo "Creating persistent model/HF cache directories..."
     create_cache_dirs
+    # Point pip at the persistent cache (under the models mount) so the on-boot node-dep reinstall
+    # after a container recreate reuses downloaded wheels instead of re-fetching them. Runtime-only
+    # (never a Dockerfile ENV) so the build doesn't bake its own pip cache into the image layer.
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"
     echo "Removing any stale v3 ComfyUI Manager from custom_nodes..."
     remove_stale_manager
     echo "Seeding Manager config (if absent)..."

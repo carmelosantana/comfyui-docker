@@ -1,11 +1,30 @@
 # Changelog
 
-## [Unreleased] — Ownership fork (carmelosantana)
+## v0.7.1 (July 29, 2026)
+
+- Fix seeded-pack ownership for packs that **already exist** in `custom_nodes`. The v0.7.0 chown
+  only ran on freshly-copied packs, so a pack seeded by an older (pre-chown) image kept its root
+  ownership on redeploy and Manager kept logging `unable to create file .git/.cnr-id`. Ownership is
+  now re-asserted on existing baked packs too (idempotent, metadata-only).
+- Add a persistent `PIP_CACHE_DIR` under the models mount. A container recreate resets the Python
+  env, so non-baked custom-node deps reinstall on the next boot; pip now reuses cached wheels
+  instead of re-downloading them. Wired into the entrypoint, all compose files, and `.env.example`.
+
+## v0.7.0 (July 29, 2026) — Ownership fork (carmelosantana)
 
 - Forked from lecode-official/comfyui-docker (MIT).
 - Ship ComfyUI-Manager v4+ and fix the custom_nodes Manager-shadowing bug.
 - Add RTX 3090 runtime defaults, generic + 3090 compose files, per-GPU docs.
 - New CI: build/smoke/publish to GHCR + scheduled ComfyUI version bump.
+- Bake the creator toolset (7 node packs) into the image, seeded into `custom_nodes` on boot with
+  category flags (`SEED_BAKED_NODES` + `SEED_{AUDIO,VIDEO,HELPER}_NODES`).
+- Bump ComfyUI `v0.8.2` → `v0.29.0` and ComfyUI-Manager `4.0.5` → `4.2.2`. The stale `v0.8.2` core
+  predated ComfyUI's new node-schema API that current KJNodes uses, causing `search_aliases` /
+  `advanced`-kwarg errors in the node menu; the bump clears them.
+- Fix seeded-pack ownership: baked packs copied into `custom_nodes` are now chowned to the runtime
+  user, so pack state (`.cnr-id`, TTS caches) is writable instead of root-owned.
+- Document that global `--use-sage-attention` produces black/NaN output on fp8 image models
+  (Qwen-Image/Flux); use `USE_SAGE_ATTENTION=0` + the per-workflow "Patch Sage Attention KJ" node.
 
 ## v0.6.3 (January 9, 2026)
 
