@@ -27,7 +27,10 @@ RUN apt-get update --assume-yes && \
         libgl1 \
         libgl1-mesa-glx \
         libglib2.0-0 \
-        ffmpeg && \
+        ffmpeg \
+        build-essential \
+        cmake \
+        pkg-config && \
     rm -rf /var/cache/apt/archives /var/lib/apt/lists/*
 
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git /opt/comfyui && \
