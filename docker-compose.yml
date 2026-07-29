@@ -13,6 +13,17 @@ services:
       # to lock down when the box is exposed publicly.
       MANAGER_NETWORK_MODE: "${MANAGER_NETWORK_MODE:-personal_cloud}"
       MANAGER_SECURITY_LEVEL: "${MANAGER_SECURITY_LEVEL:-normal}"
+      # Lazy-download caches for model weights (TTS engines, HuggingFace, torch hub). Kept inside
+      # the models mount so first-use downloads survive a container recreate. Override to relocate.
+      HF_HOME: "${HF_HOME:-/opt/comfyui/models/.cache/huggingface}"
+      TORCH_HOME: "${TORCH_HOME:-/opt/comfyui/models/.cache/torch}"
+      # Baked node packs are seeded into custom_nodes on boot, ON BY DEFAULT. Set SEED_BAKED_NODES=0
+      # to disable all seeding, or a category flag to 0 to skip just that group (audio=TTS,
+      # video=Wan/VideoHelper/Frame-Interpolation, helper=KJNodes/essentials/HF-Downloader).
+      SEED_BAKED_NODES: "${SEED_BAKED_NODES:-1}"
+      SEED_AUDIO_NODES: "${SEED_AUDIO_NODES:-1}"
+      SEED_VIDEO_NODES: "${SEED_VIDEO_NODES:-1}"
+      SEED_HELPER_NODES: "${SEED_HELPER_NODES:-1}"
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
     volumes:

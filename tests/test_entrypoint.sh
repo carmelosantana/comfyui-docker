@@ -164,4 +164,116 @@ assert_eq "--use-sage-attention" "$out" "toggle on, no args: exactly the sage fl
 out="$( USE_SAGE_ATTENTION=0 apply_sage_attention --cpu )"
 assert_true '! printf "%s" "$out" | grep -q -- "--use-sage-attention"' "USE_SAGE_ATTENTION=0 is off"
 
+# --- Task 1: seed_baked_nodes copies baked packs into custom_nodes, never clobbering ---
+BAKED_NODES_DIR="$workdir/baked"; mkdir -p "$BAKED_NODES_DIR/PackX" "$BAKED_NODES_DIR/PackY"
+echo "req" > "$BAKED_NODES_DIR/PackX/requirements.txt"
+echo "code" > "$BAKED_NODES_DIR/PackY/node.py"
+CUSTOM_NODES_DIR="$workdir/cn_seed"; mkdir -p "$CUSTOM_NODES_DIR/PackY"
+echo "USER-EDIT" > "$CUSTOM_NODES_DIR/PackY/node.py"   # pre-existing user copy must win
+seed_baked_nodes
+assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "seeds a baked pack that is absent"
+assert_eq "USER-EDIT" "$(cat "$CUSTOM_NODES_DIR/PackY/node.py")" "does NOT clobber an existing pack"
+
+# Idempotent second run makes no change and does not error.
+seed_baked_nodes
+assert_true '[ -f "$CUSTOM_NODES_DIR/PackX/requirements.txt" ]' "second seed run is idempotent"
+
+# Absent baked dir is a safe no-op.
+( BAKED_NODES_DIR="$workdir/nope"; seed_baked_nodes ) && rc=0 || rc=$?
+assert_eq "0" "$rc" "seed_baked_nodes no-ops when baked dir is absent"
+
+# node_dep_signature is stable and content-sensitive.
+sigdir="$workdir/sigp"; mkdir -p "$sigdir"; echo "a==1" > "$sigdir/requirements.txt"
+s1="$(node_dep_signature "$sigdir")"
+s2="$(node_dep_signature "$sigdir")"
+assert_eq "$s1" "$s2" "node_dep_signature is stable for unchanged content"
+echo "a==2" > "$sigdir/requirements.txt"
+assert_true '[ "$(node_dep_signature "$sigdir")" != "$s1" ]' "node_dep_signature changes when requirements change"
+
+# --- Task 2: write_baked_node_markers pre-seeds markers so the on-boot loop skips baked packs ---
+BAKED_NODES_DIR="$workdir/baked2"; mkdir -p "$BAKED_NODES_DIR/PackReq" "$BAKED_NODES_DIR/PackNone"
+echo "dep==1" > "$BAKED_NODES_DIR/PackReq/requirements.txt"
+echo "noop"   > "$BAKED_NODES_DIR/PackNone/readme.txt"   # no reqs/install.py -> no marker
+NODE_DEPS_STATE_DIR="$workdir/state2"
+write_baked_node_markers
+assert_true '[ -f "$NODE_DEPS_STATE_DIR/PackReq.hash" ]'   "marker written for a pack with requirements"
+assert_true '[ ! -f "$NODE_DEPS_STATE_DIR/PackNone.hash" ]' "no marker for a pack without dep inputs"
+assert_eq "$(node_dep_signature "$BAKED_NODES_DIR/PackReq")" "$(cat "$NODE_DEPS_STATE_DIR/PackReq.hash")" \
+    "marker equals the pack signature (loop will treat it as satisfied)"
+
+# The seeded pack + pre-seeded marker => install_node_requirements SKIPS it (no pip/python calls).
+CUSTOM_NODES_DIR="$workdir/cn_skip"; mkdir -p "$CUSTOM_NODES_DIR"
+cp -a "$BAKED_NODES_DIR/PackReq" "$CUSTOM_NODES_DIR/PackReq"
+skipbin="$workdir/skipbin"; mkdir -p "$skipbin"
+printf '#!/usr/bin/env bash\necho called >> "%s"\n' "$workdir/skip.log" > "$skipbin/pip"
+cp "$skipbin/pip" "$skipbin/python"; chmod +x "$skipbin/pip" "$skipbin/python"
+: > "$workdir/skip.log"
+PATH="$skipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
+assert_eq "0" "$(grep -c called "$workdir/skip.log" 2>/dev/null)" \
+    "baked pack with pre-seeded marker is skipped by the on-boot loop"
+
+# --- Task 2: create_cache_dirs makes the persistent HF/torch cache under the models mount ---
+COMFYUI_DIR="$workdir/opt2/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
+unset HF_HOME TORCH_HOME
+mkdir -p "$COMFYUI_DIR"
+create_cache_dirs
+assert_true '[ -d "$HF_CACHE_DIR/huggingface" ]' "huggingface cache dir created under models mount"
+assert_true '[ -d "$HF_CACHE_DIR/torch" ]'       "torch cache dir created under models mount"
+
+# --- create_cache_dirs honors HF_HOME/TORCH_HOME overrides (independent of HF_CACHE_DIR) ---
+COMFYUI_DIR="$workdir/opt3/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
+mkdir -p "$COMFYUI_DIR"
+HF_HOME="$workdir/custom-hf-home"
+TORCH_HOME="$workdir/custom-torch-home"
+create_cache_dirs
+assert_true '[ -d "$HF_HOME" ]'   "custom HF_HOME dir created when overridden"
+assert_true '[ -d "$TORCH_HOME" ]' "custom TORCH_HOME dir created when overridden"
+assert_true '[ ! -d "$HF_CACHE_DIR/huggingface" ]' "default huggingface cache dir NOT created when HF_HOME overridden"
+assert_true '[ ! -d "$HF_CACHE_DIR/torch" ]'       "default torch cache dir NOT created when TORCH_HOME overridden"
+unset HF_HOME TORCH_HOME
+
+# --- Category-gated baked-node seeding: master SEED_BAKED_NODES + per-category SEED_*_NODES ---
+BAKED_NODES_DIR="$workdir/baked_cat"
+for p in TTS-Audio-Suite ComfyUI-WanVideoWrapper ComfyUI-VideoHelperSuite ComfyUI-Frame-Interpolation \
+         ComfyUI-KJNodes ComfyUI_essentials ComfyUI_HuggingFace_Downloader; do
+    mkdir -p "$BAKED_NODES_DIR/$p"; echo x > "$BAKED_NODES_DIR/$p/marker"
+done
+
+# Category mapping is correct.
+assert_eq "audio"  "$(baked_node_category TTS-Audio-Suite)"                "TTS-Audio-Suite -> audio"
+assert_eq "video"  "$(baked_node_category ComfyUI-WanVideoWrapper)"        "WanVideoWrapper -> video"
+assert_eq "video"  "$(baked_node_category ComfyUI-Frame-Interpolation)"    "Frame-Interpolation -> video"
+assert_eq "helper" "$(baked_node_category ComfyUI-KJNodes)"                "KJNodes -> helper"
+assert_eq "helper" "$(baked_node_category ComfyUI_HuggingFace_Downloader)" "HF Downloader -> helper"
+assert_eq ""       "$(baked_node_category SomeUnknownPack)"                "unknown pack -> uncategorized"
+
+# Default (all flags unset): every category seeds.
+CUSTOM_NODES_DIR="$workdir/cn_cat_all"; mkdir -p "$CUSTOM_NODES_DIR"
+( unset SEED_BAKED_NODES SEED_AUDIO_NODES SEED_VIDEO_NODES SEED_HELPER_NODES; seed_baked_nodes )
+assert_true '[ -d "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'         "default seeds the audio pack"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]' "default seeds a video pack"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-KJNodes" ]'         "default seeds a helper pack"
+
+# Master switch off: nothing seeds, even with category flags at default.
+CUSTOM_NODES_DIR="$workdir/cn_cat_off"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_BAKED_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'         "SEED_BAKED_NODES=0 seeds nothing (audio)"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]' "SEED_BAKED_NODES=0 seeds nothing (video)"
+
+# Video category off: video packs skipped; audio + helper still seed.
+CUSTOM_NODES_DIR="$workdir/cn_cat_novideo"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_VIDEO_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]'     "SEED_VIDEO_NODES=0 skips WanVideoWrapper"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-VideoHelperSuite" ]'    "SEED_VIDEO_NODES=0 skips VideoHelperSuite"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Frame-Interpolation" ]' "SEED_VIDEO_NODES=0 skips Frame-Interpolation"
+assert_true '[ -d "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'              "SEED_VIDEO_NODES=0 still seeds audio"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-KJNodes" ]'             "SEED_VIDEO_NODES=0 still seeds helper"
+
+# Audio category off: TTS skipped; video + helper still seed.
+CUSTOM_NODES_DIR="$workdir/cn_cat_noaudio"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_AUDIO_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'        "SEED_AUDIO_NODES=0 skips TTS-Audio-Suite"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]'  "SEED_AUDIO_NODES=0 still seeds video"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI_essentials" ]'       "SEED_AUDIO_NODES=0 still seeds helper"
+
 finish

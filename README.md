@@ -34,6 +34,60 @@ This fork fixes that, and adds runtime defaults and version pinning on top. What
 - **Drop-in replacement.** It keeps lecode's environment-variable interface unchanged, so
   migrating is just swapping the image and redeploying — no compose rewrite.
 
+## What's baked into the image
+
+**All of these node packs are baked into the image and seeded into `custom_nodes` on every boot —
+on by default, no setup.** Seeding is a local copy from the image (no git/network), idempotent, and
+never overwrites a dir that already exists (your own edits win). Each pack belongs to a category you
+can turn off with an env var; `SEED_BAKED_NODES=0` disables all seeding at once.
+
+| Pack | Category (toggle) | Purpose |
+| --- | --- | --- |
+| [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) v4 | always on | Node/model management API (used by [ComfyUI-MCP](https://github.com/artokun/comfyui-mcp)). Activated as a `pip` package + `--enable-manager`, **not** seeded as a `custom_nodes` directory — see [Why this fork?](#why-this-fork) |
+| [TTS-Audio-Suite](https://github.com/diodiogod/TTS-Audio-Suite) | audio (`SEED_AUDIO_NODES`) | TTS / voice-clone engines: ChatterBox, IndexTTS-2, F5-TTS, VibeVoice, Higgs Audio, CosyVoice3, RVC |
+| [ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) | video (`SEED_VIDEO_NODES`) | Wan2.x video generation (S2V / InfiniteTalk) |
+| [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | video (`SEED_VIDEO_NODES`) | Video load/combine/encode (needs ffmpeg) |
+| [ComfyUI-Frame-Interpolation](https://github.com/Fannovel16/ComfyUI-Frame-Interpolation) | video (`SEED_VIDEO_NODES`) | RIFE frame interpolation for smooth / 60fps output (works out of the box); cupy-accelerated methods like GIMM-VFI need `cupy` added separately — the image bakes the no-cupy requirements |
+| [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | helper (`SEED_HELPER_NODES`) | Helper nodes (resize/mask/get-set) the Wan graphs need |
+| [ComfyUI_essentials](https://github.com/cubiq/ComfyUI_essentials) | helper (`SEED_HELPER_NODES`) | Common utility nodes many community workflows depend on |
+| [ComfyUI_HuggingFace_Downloader](https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader) | helper (`SEED_HELPER_NODES`) | In-graph HuggingFace model downloads |
+
+> **Node code vs. model weights:** baking a pack installs its **nodes** (they appear in ComfyUI's
+> menu), not the model checkpoints/LoRAs it uses. Those are downloaded on demand into the persistent
+> `models` mount — TTS engines auto-download their weights on first node use; Wan/SD checkpoints you
+> fetch via ComfyUI-Manager or the HuggingFace Downloader. See [model weights](#model-weights-not-baked) below.
+
+> Each `SEED_*_NODES` flag defaults to `1` (on). Set one to `0` to skip that category
+> (e.g. `SEED_VIDEO_NODES=0` on an audio-only box), or `SEED_BAKED_NODES=0` to disable all baked-node
+> seeding. To add packs beyond the baked set, install them from ComfyUI-Manager, drop them into the
+> `custom_nodes` mount, or list them in [`scripts/node-manifest.txt`](scripts/node-manifest.txt) and
+> set `BOOTSTRAP_NODES=1` (a runtime git-clone, unlike the baked set).
+
+> Any custom_nodes you drop into the mount — baked, bootstrapped, or your own — get their
+> `requirements.txt` (and `install.py`) auto-installed on the next boot, keyed on a content hash
+> so it only reinstalls when a pack's deps actually change (`FORCE_NODE_REQS=1` to force it).
+
+> Baked packs are seeded into `custom_nodes` once and never overwrite an existing copy. To pick up
+> a newer baked version after an image upgrade, delete that pack's directory from `custom_nodes`
+> and reboot the container — it re-seeds from the image.
+
+**System tools (apt):** `ffmpeg` (VideoHelperSuite decode/encode — `ffmpeg -version` works
+in-container), `git`, `aria2` (fast model downloads), `espeak-ng` (phonemizer for TTS), plus the
+`libgl1`/`libgl1-mesa-glx`/`libglib2.0-0` libraries OpenCV needs.
+
+**Python (baked into the conda env, so they survive a container recreate):** `accelerate`,
+`transformers`, `opencv-python-headless`, `imageio-ffmpeg`, `deepdiff`, `ollama`, `onnxruntime`,
+`huggingface_hub[cli]`, plus everything TTS-Audio-Suite and Frame-Interpolation require. SageAttention
+stays available on the `-sage` tags (compiled from pinned upstream source, not a prebuilt wheel).
+
+### Model weights (not baked)
+
+Baking a pack ships its **node code**, not the models it uses — model weights are **not** baked (that
+keeps the image lean). TTS engines and other packs lazy-download their weights on first use into
+`HF_HOME`/`TORCH_HOME`, which default to `models/.cache/…` inside the persistent `models` mount — so
+first-use downloads survive `docker compose down && up`. Larger checkpoints (Wan, SD) you fetch
+yourself via ComfyUI-Manager or the HuggingFace Downloader into the `models` mount.
+
 ## Quick start (generic)
 
 ```bash
@@ -59,12 +113,17 @@ recreate.
 | `COMFYUI_PORT` | `8188` | Host port published to ComfyUI's `8188` |
 | `GPU_COUNT` | `1` | Number of GPUs reserved for the container |
 | `USER_ID` / `GROUP_ID` | `1000` | Host uid/gid that should own files in the mounts |
-| `MODELS_PATH` | `./data/models` (3090 sample: `/mnt/Data/ComfyUI/models`) | Models mount |
-| `CUSTOM_NODES_PATH` | `./data/custom_nodes` (3090: `/mnt/Data/ComfyUI/custom_nodes`) | Custom nodes mount |
+| `MODELS_PATH` | `./data/models` | Models mount (the 3090 sample sets its own host default) |
+| `CUSTOM_NODES_PATH` | `./data/custom_nodes` | Custom nodes mount |
 | `OUTPUT_PATH` | `./data/output` | Output mount |
 | `INPUT_PATH` | `./data/input` | Input mount |
+| `WORKFLOWS_PATH` | (3090 samples only) | Saved-workflows mount used by the 3090 sample stacks |
 | `PYTORCH_ALLOC_CONF` | unset | Set to `expandable_segments:True` on torch 2.9 |
-| `BOOTSTRAP_NODES` | unset | Set `1` to install the supported node packs on first boot |
+| `SEED_BAKED_NODES` | `1` | Baked node packs are seeded into `custom_nodes` on boot. Set `0` to disable all seeding (bare ComfyUI + Manager) |
+| `SEED_AUDIO_NODES` | `1` | Set `0` to skip the audio pack (TTS-Audio-Suite) |
+| `SEED_VIDEO_NODES` | `1` | Set `0` to skip the video packs (WanVideoWrapper, VideoHelperSuite, Frame-Interpolation) |
+| `SEED_HELPER_NODES` | `1` | Set `0` to skip the helper packs (KJNodes, essentials, HuggingFace Downloader) |
+| `BOOTSTRAP_NODES` | unset | Set `1` to git-clone **extra** packs from `scripts/node-manifest.txt` on first boot. The supported packs are already baked in — this is only for additions |
 | `MANAGER_NETWORK_MODE` | `personal_cloud` | Manager v4 network mode, **enforced** into `user/__manager/config.ini` every boot. `personal_cloud` is **required** to unlock the install/model management API on a box that listens on `0.0.0.0` — Manager blocks those actions for `public`/`private`/`offline` on a non-loopback listen. Set to `public` to lock the box down when exposed publicly |
 | `MANAGER_SECURITY_LEVEL` | `normal` | Manager v4 security level, enforced into `user/__manager/config.ini` every boot. `normal` is the least-permissive level that still allows arbitrary git-URL node installs and arbitrary-URL model downloads via the API; `strong` blocks them |
 | `USE_SAGE_ATTENTION` | `1` in `-sage` images, else unset | On the `-sage` image, appends `--use-sage-attention` (and drops `--use-pytorch-cross-attention`). Set `0` to disable. No effect on the base image |
@@ -77,11 +136,22 @@ recreate.
   version yourself, build with `--target base --build-arg COMFYUI_REF=v0.8.2`. The `-sage` image
   is built with `docker build --target sage .`.
 
-## Installing the video/audio node packs
+## Node packs on by default (and how to disable)
 
-Set `BOOTSTRAP_NODES=1` (or run `/opt/scripts/bootstrap-nodes.sh` inside the container) to clone
-WanVideoWrapper, VideoHelperSuite, TTS-Audio-Suite, and the HuggingFace Downloader into the
-mounted `custom_nodes`. Edit `scripts/node-manifest.txt` to add your own.
+The voice, video, and helper node packs listed in
+[What's baked into the image](#whats-baked-into-the-image) are **baked in and on by default** — no
+`BOOTSTRAP_NODES` needed. Turn a category off with an env var when you don't need it:
+
+| Env | Default | Effect |
+|---|---|---|
+| `SEED_BAKED_NODES` | `1` | Set `0` to disable **all** baked-node seeding (bare ComfyUI + Manager) |
+| `SEED_AUDIO_NODES` | `1` | Set `0` to skip TTS-Audio-Suite |
+| `SEED_VIDEO_NODES` | `1` | Set `0` to skip WanVideoWrapper, VideoHelperSuite, Frame-Interpolation |
+| `SEED_HELPER_NODES` | `1` | Set `0` to skip KJNodes, essentials, HuggingFace Downloader |
+
+To add packs **beyond** the baked set, install them from ComfyUI-Manager, drop them into the
+`custom_nodes` mount, or list their git URLs in `scripts/node-manifest.txt` and set
+`BOOTSTRAP_NODES=1` (a runtime git-clone on first boot, unlike the reliable baked set).
 
 ## Custom-node Python dependencies
 
@@ -136,8 +206,8 @@ reversibly moves everything except `models input output custom_nodes user` into 
 backup folder. Dry-run first:
 
 ```bash
-sudo bash scripts/cleanup-legacy-comfyui.sh --dry-run /mnt/Data/ComfyUI
-sudo bash scripts/cleanup-legacy-comfyui.sh --apply   /mnt/Data/ComfyUI
+sudo bash scripts/cleanup-legacy-comfyui.sh --dry-run /path/to/ComfyUI
+sudo bash scripts/cleanup-legacy-comfyui.sh --apply   /path/to/ComfyUI
 ```
 
 ## Credits
