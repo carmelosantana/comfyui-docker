@@ -64,32 +64,35 @@ assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "second unforced 
 PATH="$pipbin:$PATH" FORCE_NODE_REQS="1" install_node_requirements
 assert_eq "2" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "FORCE_NODE_REQS reinstalls"
 
-# --- Task 6: seed_manager_config copies only when absent ---
-# NOTE: Manager v4 reads its config from get_system_user_directory("manager"),
-# i.e. "$COMFYUI_DIR/user/__manager/config.ini" (verified against the built image),
-# NOT the legacy "user/default/ComfyUI-Manager/config.ini" path.
-COMFYUI_DIR="$workdir/opt2"; mkdir -p "$COMFYUI_DIR"
-MANAGER_CONFIG_SRC="$workdir/default-config.ini"; printf '[default]\nsecurity_level = weak\n' > "$MANAGER_CONFIG_SRC"
-dest="$COMFYUI_DIR/user/__manager/config.ini"
-seed_manager_config
-assert_true '[ -f "$dest" ]' "config seeded when absent"
-assert_eq "weak" "$(sed -n 's/^security_level = //p' "$dest")" "seeded config has security_level weak"
-# Now a user-modified config must NOT be overwritten.
-printf '[default]\nsecurity_level = normal\n' > "$dest"
-seed_manager_config
-assert_eq "normal" "$(sed -n 's/^security_level = //p' "$dest")" "existing user config preserved"
+# --- Manager config is ENFORCED every boot from env (default personal_cloud / normal) ---
+# NOTE: Manager v4 reads its config ONLY from get_system_user_directory("manager"),
+# i.e. "$COMFYUI_DIR/user/__manager/config.ini", cached on first read. network_mode/security_level
+# have no env/CLI override in Manager, so the entrypoint enforces them here before main.py.
+# personal_cloud + normal is the only combo that unlocks the v4 install/model API on a 0.0.0.0 box.
+COMFYUI_DIR="$workdir/opt_mgr_default"; mkdir -p "$COMFYUI_DIR"
+MANAGER_CONFIG_SRC="$workdir/tmpl.ini"; printf '[default]\nsecurity_level = weak\nnetwork_mode = public\n' > "$MANAGER_CONFIG_SRC"
+( unset MANAGER_SECURITY_LEVEL MANAGER_NETWORK_MODE; seed_manager_config )
+cfg="$COMFYUI_DIR/user/__manager/config.ini"
+assert_true '[ -f "$cfg" ]' "config seeded when absent"
+assert_eq "normal"         "$(sed -n 's/^security_level = //p' "$cfg")" "default security_level is normal"
+assert_eq "personal_cloud" "$(sed -n 's/^network_mode = //p'   "$cfg")" "default network_mode is personal_cloud"
 
-# --- Task 6 fix: security level is env-overridable (default weak) ---
-# Use FRESH COMFYUI_DIR dirs each time so dest is absent (seed no-ops if dest exists).
-COMFYUI_DIR="$workdir/opt_seclvl_default"; mkdir -p "$COMFYUI_DIR"
-MANAGER_CONFIG_SRC="$workdir/tmpl.ini"
-printf '[default]\nsecurity_level = weak\nnetwork_mode = public\n' > "$MANAGER_CONFIG_SRC"
-( unset MANAGER_SECURITY_LEVEL; seed_manager_config )
-assert_eq "weak" "$(sed -n 's/^security_level = //p' "$COMFYUI_DIR/user/__manager/config.ini")" "default security_level is weak"
+# override via env
+COMFYUI_DIR="$workdir/opt_mgr_override"; mkdir -p "$COMFYUI_DIR"
+MANAGER_SECURITY_LEVEL="weak" MANAGER_NETWORK_MODE="public" seed_manager_config
+cfg="$COMFYUI_DIR/user/__manager/config.ini"
+assert_eq "weak"   "$(sed -n 's/^security_level = //p' "$cfg")" "MANAGER_SECURITY_LEVEL overrides"
+assert_eq "public" "$(sed -n 's/^network_mode = //p'   "$cfg")" "MANAGER_NETWORK_MODE overrides"
 
-COMFYUI_DIR="$workdir/opt_seclvl_override"; mkdir -p "$COMFYUI_DIR"
-MANAGER_SECURITY_LEVEL="normal" seed_manager_config
-assert_eq "normal" "$(sed -n 's/^security_level = //p' "$COMFYUI_DIR/user/__manager/config.ini")" "MANAGER_SECURITY_LEVEL overrides to normal"
+# ENFORCED even when a config already exists: a stale public flips to the default on redeploy,
+# but unrelated user keys are preserved.
+COMFYUI_DIR="$workdir/opt_mgr_stale"; mkdir -p "$COMFYUI_DIR/user/__manager"
+printf '[default]\nsecurity_level = strong\nnetwork_mode = public\nsome_user_key = keep\n' > "$COMFYUI_DIR/user/__manager/config.ini"
+( unset MANAGER_SECURITY_LEVEL MANAGER_NETWORK_MODE; seed_manager_config )
+cfg="$COMFYUI_DIR/user/__manager/config.ini"
+assert_eq "normal"         "$(sed -n 's/^security_level = //p' "$cfg")" "stale security_level corrected to normal"
+assert_eq "personal_cloud" "$(sed -n 's/^network_mode = //p'   "$cfg")" "stale network_mode corrected to personal_cloud"
+assert_true 'grep -qx "some_user_key = keep" "$cfg"' "unrelated user keys preserved"
 
 # --- Fix: maybe_bootstrap_nodes only runs the bootstrap when opted in ---
 # Inject a fake bootstrap script that just touches a marker file.

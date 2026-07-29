@@ -134,21 +134,24 @@ _set_ini_key() {
 seed_manager_config() {
     local dest_dir="$COMFYUI_DIR/user/__manager"
     local dest="$dest_dir/config.ini"
-    if [ -f "$dest" ]; then
-        echo "Manager config already present; leaving it untouched."
-        return 0
-    fi
     mkdir -p "$dest_dir"
-    if [ -f "$MANAGER_CONFIG_SRC" ]; then
-        cp "$MANAGER_CONFIG_SRC" "$dest"
-    else
-        printf '[default]\n' > "$dest"
+    if [ ! -f "$dest" ]; then
+        if [ -f "$MANAGER_CONFIG_SRC" ]; then
+            cp "$MANAGER_CONFIG_SRC" "$dest"
+        else
+            printf '[default]\n' > "$dest"
+        fi
     fi
-    local level="${MANAGER_SECURITY_LEVEL:-weak}"
-    local netmode="${MANAGER_NETWORK_MODE:-public}"
+    # Manager v4 reads network_mode/security_level ONLY from this file, cached on first read, so we
+    # enforce them here (before main.py). personal_cloud + normal is the only combo that unlocks the
+    # install/model management API on a non-loopback (--listen 0.0.0.0) box. Env-overridable, and
+    # enforced EVERY boot so a stale value from a prior image (e.g. public) is corrected on redeploy.
+    # Any other user keys already in the file are left untouched.
+    local level="${MANAGER_SECURITY_LEVEL:-normal}"
+    local netmode="${MANAGER_NETWORK_MODE:-personal_cloud}"
     _set_ini_key "$dest" security_level "$level"
     _set_ini_key "$dest" network_mode "$netmode"
-    echo "Seeded Manager config at $dest (security_level=$level, network_mode=$netmode)."
+    echo "Manager config enforced at $dest (security_level=$level, network_mode=$netmode)."
 }
 
 # Transform the ComfyUI arg list for the sage-attention toggle. When USE_SAGE_ATTENTION=1,
