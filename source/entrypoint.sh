@@ -85,7 +85,8 @@ chown_app_dirs() {
     # user, so weights it downloads are already user-owned; only the root-created cache root dirs
     # need fixing. Shallow-chown just those — never recurse (the cache grows to many GB).
     local cachedir
-    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"; do
+    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
+                    "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"; do
         [ -e "$cachedir" ] && chown "$uid:$gid" "$cachedir" 2>/dev/null || true
     done
     # Shallow chown of the app root and its top-level files (not the mounts within).
@@ -218,7 +219,8 @@ write_baked_node_markers() {
 # Create the persistent lazy-download cache dirs under the models mount. Env HF_HOME/TORCH_HOME
 # (set in the Dockerfile) point here, so engine/HF weights land on a bind mount and survive recreate.
 create_cache_dirs() {
-    mkdir -p "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"
+    mkdir -p "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
+             "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"
 }
 
 # Clone the supported node packs into custom_nodes when the user opts in with
@@ -300,6 +302,10 @@ main() {
     create_model_dirs
     echo "Creating persistent model/HF cache directories..."
     create_cache_dirs
+    # Point pip at the persistent cache (under the models mount) so the on-boot node-dep reinstall
+    # after a container recreate reuses downloaded wheels instead of re-fetching them. Runtime-only
+    # (never a Dockerfile ENV) so the build doesn't bake its own pip cache into the image layer.
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"
     echo "Removing any stale v3 ComfyUI Manager from custom_nodes..."
     remove_stale_manager
     echo "Seeding Manager config (if absent)..."

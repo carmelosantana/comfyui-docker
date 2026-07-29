@@ -236,9 +236,17 @@ assert_eq "0" "$(grep -c called "$workdir/skip.log" 2>/dev/null)" \
 COMFYUI_DIR="$workdir/opt2/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
 unset HF_HOME TORCH_HOME
 mkdir -p "$COMFYUI_DIR"
+unset PIP_CACHE_DIR
 create_cache_dirs
 assert_true '[ -d "$HF_CACHE_DIR/huggingface" ]' "huggingface cache dir created under models mount"
 assert_true '[ -d "$HF_CACHE_DIR/torch" ]'       "torch cache dir created under models mount"
+assert_true '[ -d "$HF_CACHE_DIR/pip" ]'         "pip cache dir created under models mount (persistent pip cache)"
+
+# PIP_CACHE_DIR override is honored (independent of HF_CACHE_DIR).
+COMFYUI_DIR="$workdir/opt_pip/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"; mkdir -p "$COMFYUI_DIR"
+PIP_CACHE_DIR="$workdir/custom-pip-cache" create_cache_dirs
+assert_true '[ -d "$workdir/custom-pip-cache" ]'   "custom PIP_CACHE_DIR created when overridden"
+assert_true '[ ! -d "$HF_CACHE_DIR/pip" ]'         "default pip cache dir NOT created when PIP_CACHE_DIR overridden"
 
 # --- create_cache_dirs honors HF_HOME/TORCH_HOME overrides (independent of HF_CACHE_DIR) ---
 COMFYUI_DIR="$workdir/opt3/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
