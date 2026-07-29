@@ -22,6 +22,9 @@ RUN apt-get update --assume-yes && \
         git \
         sudo \
         curl \
+        aria2 \
+        espeak-ng \
+        libgl1 \
         libgl1-mesa-glx \
         libglib2.0-0 \
         ffmpeg && \
@@ -54,8 +57,63 @@ RUN pip install --no-cache-dir \
     deepdiff \
     ollama
 
+# Additional common deps for the baked creator toolset (video/vision/audio packs + HF CLI).
+RUN pip install --no-cache-dir \
+    imageio-ffmpeg \
+    onnxruntime \
+    "huggingface_hub[cli]"
+
+# --- Baked creator node packs -------------------------------------------------------------------
+# Staged OUTSIDE custom_nodes (a runtime bind mount that would shadow them). The entrypoint seeds
+# them into the live mount on boot. Pins resolved 2026-07-29 via `git ls-remote <repo> HEAD`.
+ARG KJNODES_REF=827fe6ee0ed7348d8daa988ed852bedf1272380c
+ARG FRAME_INTERP_REF=26545cc2dd95bc3d27f056016300673bdeee78f5
+ARG ESSENTIALS_REF=9d9f4bedfc9f0321c19faf71855e228c93bd0dc9
+ARG TTS_SUITE_REF=871c97fd9962fc7ffc2e0f6d9868bb5d5e6c5d46
+
+RUN mkdir -p /opt/comfyui-baked-nodes && cd /opt/comfyui-baked-nodes && \
+    git clone https://github.com/kijai/ComfyUI-KJNodes.git ComfyUI-KJNodes && \
+    git -C ComfyUI-KJNodes checkout "${KJNODES_REF}" && \
+    git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git ComfyUI-Frame-Interpolation && \
+    git -C ComfyUI-Frame-Interpolation checkout "${FRAME_INTERP_REF}" && \
+    git clone https://github.com/cubiq/ComfyUI_essentials.git ComfyUI_essentials && \
+    git -C ComfyUI_essentials checkout "${ESSENTIALS_REF}" && \
+    git clone https://github.com/diodiogod/TTS-Audio-Suite.git TTS-Audio-Suite && \
+    git -C TTS-Audio-Suite checkout "${TTS_SUITE_REF}"
+
+# KJNodes / essentials / Frame-Interpolation install cleanly with plain pip. Frame-Interpolation
+# uses the no-cupy requirements (RIFE works without cupy; cupy-wheel pulls a heavy CUDA runtime).
+RUN pip install --no-cache-dir \
+        -r /opt/comfyui-baked-nodes/ComfyUI-KJNodes/requirements.txt \
+        -r /opt/comfyui-baked-nodes/ComfyUI_essentials/requirements.txt \
+        -r /opt/comfyui-baked-nodes/ComfyUI-Frame-Interpolation/requirements-no-cupy.txt
+
+# TTS-Audio-Suite's requirements.txt explicitly defers to install.py for conflict resolution
+# (--no-deps installs, numpy/opencv pinning, engine bundling). Install the safe requirements first,
+# then run install.py to bake the full engine dep set (ChatterBox/F5/Higgs/IndexTTS-2/CosyVoice3/RVC).
+RUN pip install --no-cache-dir -r /opt/comfyui-baked-nodes/TTS-Audio-Suite/requirements.txt
+RUN cd /opt/comfyui-baked-nodes/TTS-Audio-Suite && python install.py
+
+# Guard: TTS install.py reshapes shared deps (numpy/opencv/etc). Fail the build if it broke torch.
+RUN python -c "import torch, torchaudio; print('torch', torch.__version__, 'torchaudio', torchaudio.__version__)"
+
+# Pre-seed on-boot node-dep markers for the baked packs so the entrypoint's install loop treats
+# them as already-satisfied (deps are in the image) and does not reinstall on every boot/recreate.
+COPY source/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && \
+    BAKED_NODES_DIR=/opt/comfyui-baked-nodes \
+    NODE_DEPS_STATE_DIR=/opt/comfyui/.node-deps-state \
+    bash -c 'source /entrypoint.sh && write_baked_node_markers' && \
+    ls -1 /opt/comfyui/.node-deps-state
+
 # Default Manager config, seeded by the entrypoint only when the user has none.
 COPY source/manager-config.ini /opt/comfyui-manager-config.ini
+
+# Lazy-download caches point into the models bind mount so first-use weights survive recreate
+# (§4 decision: lean image, no baked weights). The entrypoint creates + chowns these on boot.
+ENV HF_HOME=/opt/comfyui/models/.cache/huggingface \
+    HF_HUB_CACHE=/opt/comfyui/models/.cache/huggingface/hub \
+    TORCH_HOME=/opt/comfyui/models/.cache/torch
 
 WORKDIR /opt/comfyui
 
@@ -68,8 +126,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=5 \
 COPY scripts/ /opt/scripts/
 RUN chmod +x /opt/scripts/*.sh
 
-COPY source/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
 
 # ---------------------------------------------------------------------------
@@ -121,6 +177,9 @@ ARG TRITON_VERSION=3.5.1
 COPY --from=sage-build /wheels/*.whl /tmp/wheels/
 RUN pip install --no-cache-dir "triton==${TRITON_VERSION}" /tmp/wheels/*.whl && \
     rm -rf /tmp/wheels
+
+# Guard: confirm the baked-toolset dep changes did not break sageattention import in the sage image.
+RUN python -c "import torch, sageattention; print('sage ok on torch', torch.__version__)"
 
 # Swap-and-go: the -sage tag runs with sage attention on. Set to 0 to A/B without a rebuild.
 ENV USE_SAGE_ATTENTION=1
