@@ -214,9 +214,22 @@ assert_eq "0" "$(grep -c called "$workdir/skip.log" 2>/dev/null)" \
 
 # --- Task 2: create_cache_dirs makes the persistent HF/torch cache under the models mount ---
 COMFYUI_DIR="$workdir/opt2/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
+unset HF_HOME TORCH_HOME
 mkdir -p "$COMFYUI_DIR"
 create_cache_dirs
 assert_true '[ -d "$HF_CACHE_DIR/huggingface" ]' "huggingface cache dir created under models mount"
 assert_true '[ -d "$HF_CACHE_DIR/torch" ]'       "torch cache dir created under models mount"
+
+# --- create_cache_dirs honors HF_HOME/TORCH_HOME overrides (independent of HF_CACHE_DIR) ---
+COMFYUI_DIR="$workdir/opt3/comfyui"; HF_CACHE_DIR="$COMFYUI_DIR/models/.cache"
+mkdir -p "$COMFYUI_DIR"
+HF_HOME="$workdir/custom-hf-home"
+TORCH_HOME="$workdir/custom-torch-home"
+create_cache_dirs
+assert_true '[ -d "$HF_HOME" ]'   "custom HF_HOME dir created when overridden"
+assert_true '[ -d "$TORCH_HOME" ]' "custom TORCH_HOME dir created when overridden"
+assert_true '[ ! -d "$HF_CACHE_DIR/huggingface" ]' "default huggingface cache dir NOT created when HF_HOME overridden"
+assert_true '[ ! -d "$HF_CACHE_DIR/torch" ]'       "default torch cache dir NOT created when TORCH_HOME overridden"
+unset HF_HOME TORCH_HOME
 
 finish

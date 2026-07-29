@@ -81,10 +81,13 @@ chown_app_dirs() {
     # its snapshots/startup-scripts/cache/batch_history subdirs on start. It is small and ours.
     [ -e "$COMFYUI_DIR/user/__manager" ] && \
         chown --recursive "$uid:$gid" "$COMFYUI_DIR/user/__manager" 2>/dev/null || true
-    # The lazy-download cache lives under the (excluded) models mount; the runtime user must own it
-    # recursively so HF/torch can write weights there on first use.
-    [ -e "$HF_CACHE_DIR" ] && \
-        chown --recursive "$uid:$gid" "$HF_CACHE_DIR" 2>/dev/null || true
+    # The lazy-download cache lives under the (excluded) models mount. main.py runs as the target
+    # user, so weights it downloads are already user-owned; only the root-created cache root dirs
+    # need fixing. Shallow-chown just those — never recurse (the cache grows to many GB).
+    local cachedir
+    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"; do
+        [ -e "$cachedir" ] && chown "$uid:$gid" "$cachedir" 2>/dev/null || true
+    done
     # Shallow chown of the app root and its top-level files (not the mounts within).
     chown "$uid:$gid" "$COMFYUI_DIR" 2>/dev/null || true
     find "$COMFYUI_DIR" -maxdepth 1 -type f -exec chown "$uid:$gid" {} + 2>/dev/null || true
@@ -163,7 +166,7 @@ write_baked_node_markers() {
 # Create the persistent lazy-download cache dirs under the models mount. Env HF_HOME/TORCH_HOME
 # (set in the Dockerfile) point here, so engine/HF weights land on a bind mount and survive recreate.
 create_cache_dirs() {
-    mkdir -p "$HF_CACHE_DIR/huggingface" "$HF_CACHE_DIR/torch"
+    mkdir -p "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"
 }
 
 # Clone the supported node packs into custom_nodes when the user opts in with

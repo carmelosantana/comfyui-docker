@@ -115,8 +115,9 @@ COPY source/manager-config.ini /opt/comfyui-manager-config.ini
 
 # Lazy-download caches point into the models bind mount so first-use weights survive recreate
 # (§4 decision: lean image, no baked weights). The entrypoint creates + chowns these on boot.
+# huggingface_hub derives HF_HUB_CACHE from HF_HOME automatically, so it is left unset here --
+# setting it explicitly would diverge from HF_HOME whenever a user overrides HF_HOME.
 ENV HF_HOME=/opt/comfyui/models/.cache/huggingface \
-    HF_HUB_CACHE=/opt/comfyui/models/.cache/huggingface/hub \
     TORCH_HOME=/opt/comfyui/models/.cache/torch
 
 WORKDIR /opt/comfyui
