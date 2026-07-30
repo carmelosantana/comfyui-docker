@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.7.2 (July 29, 2026)
+
+- Fix a protobuf/onnx version skew that silently broke ChatterBox TTS and threw `VersionError`
+  at boot on WanVideoWrapper (FantasyPortrait) and comfyui-rmbg. onnx and protobuf are both
+  unpinned transitives (onnx arrives via `s3tokenizer`, pulled by TTS-Audio-Suite's `install.py`,
+  which declares a bare `onnx`), so each rebuild resolves them independently. One unlucky pairing
+  shipped onnx 1.18 (protobuf **gencode 6.31.1**) against a protobuf **runtime 5.29.6**, so
+  `import onnx` raised `Detected incompatible Protobuf Gencode/Runtime versions`. Worse, TTS's
+  `UnifiedTTSTextNode` swallowed the exception and returned a **silent** audio track, so jobs
+  reported success while producing no speech (masking any downstream lip-sync). Fixed by pinning
+  `onnx==1.22.0` — a current release whose generated code carries no runtime-version guard, so it
+  imports against whatever protobuf resolves to and the skew cannot recur. protobuf, onnxruntime,
+  tensorboard, descript-audiotools and every other consumer are left untouched. The pin lives in
+  the image, so it survives a container recreate.
+
 ## v0.7.1 (July 29, 2026)
 
 - Fix seeded-pack ownership for packs that **already exist** in `custom_nodes`. The v0.7.0 chown

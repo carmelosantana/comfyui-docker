@@ -114,6 +114,18 @@ RUN cd /opt/comfyui-baked-nodes/TTS-Audio-Suite && python install.py
 # Guard: TTS install.py reshapes shared deps (numpy/opencv/etc). Fail the build if it broke torch.
 RUN python -c "import torch, torchaudio; print('torch', torch.__version__, 'torchaudio', torchaudio.__version__)"
 
+# Pin onnx to stop a protobuf gencode<->runtime skew. onnx and protobuf are both unpinned
+# transitives (onnx arrives via s3tokenizer, pulled by TTS ChatterBox's install.py), so each
+# rebuild resolves them independently. One unlucky pairing shipped onnx 1.18 (protobuf gencode
+# 6.31.1) against a protobuf runtime held back to 5.29.6, so `import onnx` raised VersionError.
+# TTS's UnifiedTTSTextNode swallows that and returns a SILENT track (job "succeeds" with no
+# speech); WanVideoWrapper FantasyPortrait and comfyui-rmbg hit the same error at boot. Pin onnx
+# to a current release whose generated code carries no runtime-version guard, so it imports
+# against whatever protobuf resolves to and the skew cannot recur. The import guard below IS the
+# acceptance test, enforced at build time (fails the build on any regression).
+RUN pip install --no-cache-dir "onnx==1.22.0" && \
+    python -c "import onnx, onnx.onnx_ml_pb2, s3tokenizer; print('onnx', onnx.__version__)"
+
 # Pre-seed on-boot node-dep markers for the baked packs so the entrypoint's install loop treats
 # them as already-satisfied (deps are in the image) and does not reinstall on every boot/recreate.
 COPY source/entrypoint.sh /entrypoint.sh
