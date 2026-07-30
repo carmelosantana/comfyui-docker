@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.4 (July 30, 2026)
+
+- Fix the persistent pip cache silently disabling itself on every boot. The on-boot custom-node
+  install loop runs pip as **root**, but `chown_app_dirs` chowned `PIP_CACHE_DIR` to the runtime
+  user (1000) — and pip refuses a cache dir it doesn't own (`check_path_owner`), logging *"The
+  directory ... is not owned or is not writable by the current user. The cache has been disabled"*
+  and re-downloading every wheel each boot. The pip cache is root-only (the runtime user never runs
+  pip), so `create_cache_dirs` now keeps it root-owned and `chown_app_dirs` no longer chowns it to
+  the runtime user. The HuggingFace and torch caches stay user-owned (main.py writes weights there
+  as the runtime user). Verified: root-owned cache → pip caches wheels; user-owned → disabled.
+
 ## v0.7.3 (July 30, 2026)
 
 - Actually fix the protobuf gencode/runtime skew on real deployments. v0.7.2 pinned onnx in the

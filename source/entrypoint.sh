@@ -84,9 +84,12 @@ chown_app_dirs() {
     # The lazy-download cache lives under the (excluded) models mount. main.py runs as the target
     # user, so weights it downloads are already user-owned; only the root-created cache root dirs
     # need fixing. Shallow-chown just those — never recurse (the cache grows to many GB).
+    # HF/torch caches are written by main.py AS the runtime user, so they must be user-owned.
+    # PIP_CACHE_DIR is deliberately excluded: the on-boot install loop runs pip as root, and pip
+    # refuses (disables) a cache dir it doesn't own (check_path_owner). It is kept root-owned by
+    # create_cache_dirs instead — the runtime user never runs pip, so it needs no access to it.
     local cachedir
-    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
-                    "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"; do
+    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"; do
         [ -e "$cachedir" ] && chown "$uid:$gid" "$cachedir" 2>/dev/null || true
     done
     # Shallow chown of the app root and its top-level files (not the mounts within).
@@ -248,6 +251,11 @@ write_baked_node_markers() {
 create_cache_dirs() {
     mkdir -p "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
              "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"
+    # The on-boot custom-node install loop runs pip as root; pip refuses (and disables) a cache dir
+    # it does not own, warning "not owned or is not writable by the current user ... use sudo's -H".
+    # This cache is root-only (the runtime user never runs pip), so keep it root-owned — repairing
+    # any dir a prior image chowned to the runtime user (which is what silently disabled the cache).
+    chown 0:0 "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}" 2>/dev/null || true
 }
 
 # Clone the supported node packs into custom_nodes when the user opts in with
