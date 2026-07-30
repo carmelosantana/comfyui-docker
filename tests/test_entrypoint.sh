@@ -304,4 +304,32 @@ assert_true '[ ! -e "$CUSTOM_NODES_DIR/TTS-Audio-Suite" ]'        "SEED_AUDIO_NO
 assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-WanVideoWrapper" ]'  "SEED_AUDIO_NODES=0 still seeds video"
 assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI_essentials" ]'       "SEED_AUDIO_NODES=0 still seeds helper"
 
+# --- ensure_protobuf_runtime: re-assert the protobuf floor AFTER the on-boot custom-node loop ---
+# User packs (e.g. comfyui-rmbg pins protobuf<6) downgrade protobuf during install_node_requirements,
+# breaking gencode-6.31.1 consumers (onnx, tensorboard, FantasyPortrait). This re-asserts it.
+pbin="$workdir/pbbin"; mkdir -p "$pbin"
+export PB_PIP_LOG="$workdir/pb_pip.log"
+mk_pip() { printf '#!/usr/bin/env bash\necho "$@" >> "%s"\n' "$PB_PIP_LOG" > "$pbin/pip"; chmod +x "$pbin/pip"; }
+mk_py()  { printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$pbin/python"; chmod +x "$pbin/python"; }
+
+# Already satisfied (mock python exits 0) -> no pip re-install.
+mk_pip; mk_py 0; : > "$PB_PIP_LOG"
+PATH="$pbin:$PATH" ensure_protobuf_runtime
+assert_eq "0" "$(grep -c protobuf "$PB_PIP_LOG" 2>/dev/null)" "protobuf already >= floor: no re-install"
+
+# Below floor (mock python exits 1) -> pip re-installs to the floor.
+mk_pip; mk_py 1; : > "$PB_PIP_LOG"
+PATH="$pbin:$PATH" ensure_protobuf_runtime
+assert_eq "1" "$(grep -c 'protobuf>=6.31.1' "$PB_PIP_LOG")" "protobuf below floor: re-installed to >=6.31.1"
+
+# PROTOBUF_MIN_VERSION override is honored.
+mk_pip; mk_py 1; : > "$PB_PIP_LOG"
+PATH="$pbin:$PATH" PROTOBUF_MIN_VERSION="9.9.9" ensure_protobuf_runtime
+assert_true 'grep -q "protobuf>=9.9.9" "$PB_PIP_LOG"' "re-assert honors PROTOBUF_MIN_VERSION override"
+
+# A failing pip must NOT crash boot (resilience), like the requirements loop.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$pbin/pip"; chmod +x "$pbin/pip"; mk_py 1
+PATH="$pbin:$PATH" ensure_protobuf_runtime && rc=0 || rc=$?
+assert_eq "0" "$rc" "ensure_protobuf_runtime survives a failing pip (continues boot)"
+
 finish

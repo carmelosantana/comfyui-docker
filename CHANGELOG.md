@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.7.3 (July 30, 2026)
+
+- Actually fix the protobuf gencode/runtime skew on real deployments. v0.7.2 pinned onnx in the
+  **image**, but that can't survive a boot: the entrypoint's on-boot `pip install -r requirements.txt`
+  loop runs user-added packs' requirements, and at least one (`comfyui-rmbg`, pinning
+  `protobuf<6.0.0`) **downgrades protobuf to 5.29.6 on every fresh boot** — after the image is built.
+  The baked stack's generated code (onnx, tensorboard, WanVideoWrapper's FantasyPortrait) targets
+  protobuf gencode 6.31.1, so the downgrade reintroduces `VersionError: incompatible Protobuf
+  Gencode/Runtime versions` and silently breaks ChatterBox TTS again.
+- The entrypoint now re-asserts a compatible protobuf runtime (`>=6.31.1`, floor set by
+  `PROTOBUF_MIN_VERSION`) **after** the custom-node loop, so a user pack's downgrade can't persist.
+  It's a cheap version-check no-op when protobuf is already current, keeps the install loop intact,
+  and — verified against a reproduction of the deployed failure — restores clean imports for onnx,
+  s3tokenizer, tensorboard, onnxruntime, and mediapipe (moving protobuf *up* also clears the
+  `comfyui-rmbg`/tensorboard site that pinning onnx down could not).
+
 ## v0.7.2 (July 29, 2026)
 
 - Fix a protobuf/onnx version skew that silently broke ChatterBox TTS and threw `VersionError`

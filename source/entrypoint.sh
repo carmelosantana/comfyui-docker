@@ -130,6 +130,33 @@ install_node_requirements() {
     done
 }
 
+# Re-assert a protobuf runtime new enough for the baked stack, AFTER the custom-node install loop.
+# Some user-added packs pin an old protobuf in their requirements.txt (e.g. comfyui-rmbg pins
+# protobuf<6) and downgrade it on every fresh boot. The baked stack — onnx, tensorboard, and packs
+# like WanVideoWrapper's FantasyPortrait — ships generated code targeting protobuf gencode 6.31.1,
+# which raises "incompatible Protobuf Gencode/Runtime versions" at import when the runtime is older.
+# An image-level pin can't survive the loop, so we correct it here instead of disabling the loop.
+# Runs as root (same as the loop). Cheap no-op when protobuf is already >= the floor or absent.
+PROTOBUF_MIN_VERSION="${PROTOBUF_MIN_VERSION:-6.31.1}"
+ensure_protobuf_runtime() {
+    if python - "$PROTOBUF_MIN_VERSION" <<'PY'
+import sys
+try:
+    from importlib.metadata import version
+    cur = tuple(int(p) for p in version("protobuf").split(".")[:3])
+    floor = tuple(int(p) for p in sys.argv[1].split(".")[:3])
+    sys.exit(0 if cur >= floor else 1)
+except Exception:
+    sys.exit(0)  # protobuf absent or unparsable: nothing to re-assert
+PY
+    then
+        return 0
+    fi
+    echo "Re-asserting protobuf>=$PROTOBUF_MIN_VERSION (a custom-node pack downgraded it)..."
+    pip install --no-cache-dir "protobuf>=$PROTOBUF_MIN_VERSION" \
+        || echo "WARN: could not re-assert protobuf>=$PROTOBUF_MIN_VERSION (continuing)"
+}
+
 # Map a baked pack directory name to its seeding category (audio|video|helper), or "" if
 # uncategorized. Categories let a user disable a whole class of baked packs via SEED_{CAT}_NODES
 # without touching the others. Adding a baked pack (in the Dockerfile) should add it here too.
@@ -316,6 +343,9 @@ main() {
     maybe_bootstrap_nodes
     echo "Installing custom-node requirements (once)..."
     install_node_requirements
+    # A user pack in the loop above may have downgraded protobuf below what the baked stack's
+    # generated code (onnx/tensorboard/FantasyPortrait, gencode 6.31.1) needs. Correct it now.
+    ensure_protobuf_runtime
 
     mapfile -t COMFY_ARGS < <(apply_sage_attention "$@")
 
