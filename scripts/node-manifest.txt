@@ -10,5 +10,6 @@
 #   https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite (baked: SEED_VIDEO_NODES)
 #   https://github.com/diodiogod/TTS-Audio-Suite             (baked: SEED_AUDIO_NODES)
 #   https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader  (baked: SEED_HELPER_NODES)
+#   https://github.com/stavsap/comfyui-ollama                (baked: SEED_LLM_NODES)
 #
 # Add your own extra packs below, one git URL per line, then set BOOTSTRAP_NODES=1:

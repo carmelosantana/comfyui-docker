@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.0 (August 17, 2026) — Ultimate creator image
+
+- Bump ComfyUI `v0.29.0` → `v0.33.1`, which ships **native MiniMax-Music3** text-to-music
+  (`MiniMaxMusic3TextEncode`, `EmptyMiniMaxMusic3LatentAudio`) as core nodes. **ACE-Step** 1.0/1.5
+  stay core. No pack or baked weights for either — weights download into the `models` mount
+  (see README "Model weights").
+- Bake the [comfyui-ollama](https://github.com/stavsap/comfyui-ollama) node pack (in-graph Ollama
+  LLM nodes) under a new **`llm`** seeding category. Toggle with `SEED_LLM_NODES` (default `1`),
+  wired across the entrypoint, all compose samples, and `.env.example`. Pins `ollama==0.6.0`.
+- Add build-time import guards for the core MiniMax/ACE modules and the comfyui-ollama deps so a
+  future ComfyUI bump that breaks them fails the build.
+- Folds in the previously-unmerged protobuf/onnx fixes (v0.7.2–v0.7.4): `onnx==1.22.0` pin, on-boot
+  `protobuf>=6.31.1` re-assertion, and a root-owned persistent `PIP_CACHE_DIR`.
+
 ## v0.7.4 (July 30, 2026)
 
 - Fix the persistent pip cache silently disabling itself on every boot. The on-boot custom-node
