@@ -11,11 +11,11 @@ ARG CUDNN_VERSION=9
 FROM pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-runtime AS base
 
 # ComfyUI is pinned by a ref (tag like "v0.29.0" or a commit SHA); Manager is pinned by a tag (v4+).
-ARG COMFYUI_REF=v0.29.0
+ARG COMFYUI_REF=v0.33.1
 ARG COMFYUI_MANAGER_VERSION=4.2.2
 
 # Keep COMFYUI_VERSION as an alias so CI version-extraction and image labels stay stable.
-ARG COMFYUI_VERSION=0.29.0
+ARG COMFYUI_VERSION=0.33.1
 
 RUN apt-get update --assume-yes && \
     apt-get install --assume-yes --no-install-recommends \
@@ -77,6 +77,7 @@ ARG TTS_SUITE_REF=871c97fd9962fc7ffc2e0f6d9868bb5d5e6c5d46
 ARG WANVIDEO_REF=088128b224242e110d3906c6750e9a3a348a659b
 ARG VHS_REF=4ee72c065db22c9d96c2427954dc69e7b908444b
 ARG HF_DOWNLOADER_REF=2bba5db6a52479e8ad465dbade19dd0da0784bd3
+ARG OLLAMA_NODES_REF=6db7560576e5a59488708e6be13e07b5aba2432a
 
 RUN mkdir -p /opt/comfyui-baked-nodes && cd /opt/comfyui-baked-nodes && \
     git clone https://github.com/kijai/ComfyUI-KJNodes.git ComfyUI-KJNodes && \
@@ -92,7 +93,9 @@ RUN mkdir -p /opt/comfyui-baked-nodes && cd /opt/comfyui-baked-nodes && \
     git clone https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader.git ComfyUI_HuggingFace_Downloader && \
     git -C ComfyUI_HuggingFace_Downloader checkout "${HF_DOWNLOADER_REF}" && \
     git clone https://github.com/diodiogod/TTS-Audio-Suite.git TTS-Audio-Suite && \
-    git -C TTS-Audio-Suite checkout "${TTS_SUITE_REF}"
+    git -C TTS-Audio-Suite checkout "${TTS_SUITE_REF}" && \
+    git clone https://github.com/stavsap/comfyui-ollama.git comfyui-ollama && \
+    git -C comfyui-ollama checkout "${OLLAMA_NODES_REF}"
 
 # The video/helper/downloader packs install cleanly with plain pip (mostly wheels; several deps are
 # already present from the heavy-deps layer above). Frame-Interpolation uses the no-cupy requirements
@@ -103,7 +106,8 @@ RUN pip install --no-cache-dir \
         -r /opt/comfyui-baked-nodes/ComfyUI-Frame-Interpolation/requirements-no-cupy.txt \
         -r /opt/comfyui-baked-nodes/ComfyUI-WanVideoWrapper/requirements.txt \
         -r /opt/comfyui-baked-nodes/ComfyUI-VideoHelperSuite/requirements.txt \
-        -r /opt/comfyui-baked-nodes/ComfyUI_HuggingFace_Downloader/requirements.txt
+        -r /opt/comfyui-baked-nodes/ComfyUI_HuggingFace_Downloader/requirements.txt \
+        -r /opt/comfyui-baked-nodes/comfyui-ollama/requirements.txt
 
 # TTS-Audio-Suite's requirements.txt explicitly defers to install.py for conflict resolution
 # (--no-deps installs, numpy/opencv pinning, engine bundling). Install the safe requirements first,
@@ -125,6 +129,13 @@ RUN python -c "import torch, torchaudio; print('torch', torch.__version__, 'torc
 # acceptance test, enforced at build time (fails the build on any regression).
 RUN pip install --no-cache-dir "onnx==1.22.0" && \
     python -c "import onnx, onnx.onnx_ml_pb2, s3tokenizer; print('onnx', onnx.__version__)"
+
+# Guard: the ComfyUI bump (0.29->0.33) is the API-drift risk. Fail the build if the core MiniMax
+# Music 3 or ACE-Step audio node modules no longer import against the pinned ComfyUI.
+RUN cd /opt/comfyui && python -c "import comfy_extras.nodes_minimax_music, comfy_extras.nodes_ace; print('core audio nodes import OK')"
+
+# Guard: comfyui-ollama's deps (ollama client + dotenv) must be importable in the baked env.
+RUN python -c "import ollama, dotenv; print('ollama', ollama.__version__)"
 
 # Pre-seed on-boot node-dep markers for the baked packs so the entrypoint's install loop treats
 # them as already-satisfied (deps are in the image) and does not reinstall on every boot/recreate.
