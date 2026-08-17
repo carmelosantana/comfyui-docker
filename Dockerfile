@@ -11,11 +11,11 @@ ARG CUDNN_VERSION=9
 FROM pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-runtime AS base
 
 # ComfyUI is pinned by a ref (tag like "v0.29.0" or a commit SHA); Manager is pinned by a tag (v4+).
-ARG COMFYUI_REF=v0.29.0
+ARG COMFYUI_REF=v0.33.1
 ARG COMFYUI_MANAGER_VERSION=4.2.2
 
 # Keep COMFYUI_VERSION as an alias so CI version-extraction and image labels stay stable.
-ARG COMFYUI_VERSION=0.29.0
+ARG COMFYUI_VERSION=0.33.1
 
 RUN apt-get update --assume-yes && \
     apt-get install --assume-yes --no-install-recommends \
