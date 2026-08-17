@@ -160,7 +160,7 @@ PY
         || echo "WARN: could not re-assert protobuf>=$PROTOBUF_MIN_VERSION (continuing)"
 }
 
-# Map a baked pack directory name to its seeding category (audio|video|helper), or "" if
+# Map a baked pack directory name to its seeding category (audio|video|helper|llm), or "" if
 # uncategorized. Categories let a user disable a whole class of baked packs via SEED_{CAT}_NODES
 # without touching the others. Adding a baked pack (in the Dockerfile) should add it here too.
 baked_node_category() {
@@ -168,17 +168,19 @@ baked_node_category() {
         TTS-Audio-Suite) echo audio ;;
         ComfyUI-WanVideoWrapper|ComfyUI-VideoHelperSuite|ComfyUI-Frame-Interpolation) echo video ;;
         ComfyUI-KJNodes|ComfyUI_essentials|ComfyUI_HuggingFace_Downloader) echo helper ;;
+        comfyui-ollama) echo llm ;;
         *) echo "" ;;
     esac
 }
 
-# Whether a seeding category is enabled. Each SEED_{AUDIO,VIDEO,HELPER}_NODES defaults to 1 (on).
+# Whether a seeding category is enabled. Each SEED_{AUDIO,VIDEO,HELPER,LLM}_NODES defaults to 1 (on).
 # An uncategorized pack ("") is always enabled — it is gated only by the master SEED_BAKED_NODES.
 category_enabled() {
     case "$1" in
         audio)  [ "${SEED_AUDIO_NODES:-1}"  = "1" ] ;;
         video)  [ "${SEED_VIDEO_NODES:-1}"  = "1" ] ;;
         helper) [ "${SEED_HELPER_NODES:-1}" = "1" ] ;;
+        llm)    [ "${SEED_LLM_NODES:-1}"    = "1" ] ;;
         *)      return 0 ;;
     esac
 }
