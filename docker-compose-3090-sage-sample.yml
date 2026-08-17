@@ -39,6 +39,7 @@ services:
       SEED_AUDIO_NODES: "${SEED_AUDIO_NODES:-1}"
       SEED_VIDEO_NODES: "${SEED_VIDEO_NODES:-1}"
       SEED_HELPER_NODES: "${SEED_HELPER_NODES:-1}"
+      SEED_LLM_NODES: "${SEED_LLM_NODES:-1}"
     ports:
       - "8188:8188"
     volumes:
