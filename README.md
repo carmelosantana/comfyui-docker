@@ -149,13 +149,37 @@ recreate.
 | `MANAGER_SECURITY_LEVEL` | `normal` | Manager v4 security level, enforced into `user/__manager/config.ini` every boot. `normal` is the least-permissive level that still allows arbitrary git-URL node installs and arbitrary-URL model downloads via the API; `strong` blocks them |
 | `USE_SAGE_ATTENTION` | `1` in `-sage` images, else unset | On the `-sage` image, appends `--use-sage-attention` (and drops `--use-pytorch-cross-attention`). Set `0` to disable. No effect on the base image |
 
+## Versioning
+
+Images use **calendar versioning** — the date says *when it was built*, a separate tag says *what
+ComfyUI is inside*:
+
+| Tag | Meaning | Mutable? |
+| --- | --- | --- |
+| `latest` / `latest-sage` | Newest build (moves on every `main` merge) | yes |
+| `YY.MM.DD` / `YY.MM.DD-sage` | A dated, frozen snapshot | no |
+| `comfyui-<ver>` / `-sage` | Newest build of a given ComfyUI version | yes |
+| `YY.MM.DD-comfyui-<ver>` / `-sage` | Dated snapshot + its ComfyUI version | no |
+| `sha-<sha>` / `-sage` | Exact commit build | no |
+
+- **Track current:** leave `IMAGE_TAG` unset (defaults to `latest` / `latest-sage`) and
+  `docker compose pull && docker compose up -d` to refresh.
+- **Pin reproducibly:** set `IMAGE_TAG=YY.MM.DD-sage` (or `-comfyui-<ver>-sage`).
+
+Releases are dated (`vYY.MM.DD`). The weekly upstream-ComfyUI bump is automated end to end: it opens a
+PR, CI validates the base + sage images, it auto-merges on green, and a dated release is cut
+automatically. Cut a manual release any time with
+`gh release create v$(date -u +%y.%m.%d) --target main --generate-notes`. (`v0.8.0` is the last
+SemVer release; CalVer starts with the next one.)
+
 ## Updating
 
 - **Pull a new image:** `docker compose pull && docker compose up -d`.
-- **Bump ComfyUI core:** CI opens a weekly PR bumping `ARG COMFYUI_REF`/`COMFYUI_VERSION` to the
-  latest release; merging rebuilds and republishes `latest` + pinned tags. To pin a specific
-  version yourself, build with `--target base --build-arg COMFYUI_REF=v0.29.0`. The `-sage` image
-  is built with `docker build --target sage .`.
+- **Bump ComfyUI core:** fully automated. A weekly workflow opens a PR bumping `ARG COMFYUI_REF`/
+  `COMFYUI_VERSION` to the latest ComfyUI release; CI builds + smoke-tests base and `-sage`; on green
+  it auto-merges (moving `latest`/`latest-sage`) and a dated `vYY.MM.DD` release is cut with the
+  pinned images. To pin a specific ComfyUI yourself, build with
+  `--target base --build-arg COMFYUI_REF=v0.33.1`. The `-sage` image is `docker build --target sage .`.
 
 ## Node packs on by default (and how to disable)
 
@@ -224,9 +248,11 @@ prebuilt wheels.
 
 CI publishes to `ghcr.io/carmelosantana/comfyui-docker` on pushes to `main`, version tags, and a
 weekly schedule. **First-time setup:** enable Actions on the fork, and after the first publish set
-the GHCR package visibility to public. The weekly bump PR also requires
-*Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests"* to be
-enabled. Pull requests build + smoke-test but do not push.
+the GHCR package visibility to public. The automated bump/auto-merge/auto-release flow requires a
+fine-grained PAT stored as the repo secret `BUMP_TOKEN` (Contents + Pull requests: read/write) —
+`GITHUB_TOKEN` cannot trigger CI on its own PRs or create release-triggering tags. It also requires
+*Settings → General → Allow auto-merge* on, and a branch-protection rule on `main` requiring the
+`build` and `build-sage` checks. Pull requests build + smoke-test but do not push.
 
 ## Cleaning up a migrated install
 
