@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — tooling
+
+- Switch image versioning to **CalVer `YY.MM.DD`** (replacing SemVer); keep `latest`/`latest-sage`
+  and the `comfyui-<ver>` axis. `v0.8.0` is the last SemVer tag.
+- Automate the weekly ComfyUI bump end to end: PAT-authed PR (`BUMP_TOKEN`) → CI → auto-merge → a
+  dated `vYY.MM.DD` GitHub Release with pinned images. Adds `.github/workflows/release.yml`.
+
 ## v0.8.0 (August 17, 2026) — Ultimate creator image
 
 - Bump ComfyUI `v0.29.0` → `v0.33.1`, which ships **native MiniMax-Music3** text-to-music
