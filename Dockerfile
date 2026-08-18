@@ -130,12 +130,15 @@ RUN python -c "import torch, torchaudio; print('torch', torch.__version__, 'torc
 RUN pip install --no-cache-dir "onnx==1.22.0" && \
     python -c "import onnx, onnx.onnx_ml_pb2, s3tokenizer; print('onnx', onnx.__version__)"
 
-# Guard: the ComfyUI bump (0.29->0.33) is the API-drift risk. Fail the build if the core MiniMax
-# Music 3 or ACE-Step audio node modules no longer import against the pinned ComfyUI.
-RUN cd /opt/comfyui && python -c "import comfy_extras.nodes_minimax_music, comfy_extras.nodes_ace; print('core audio nodes import OK')"
-
 # Guard: comfyui-ollama's deps (ollama client + dotenv) must be importable in the baked env.
 RUN python -c "import ollama, dotenv; print('ollama', ollama.__version__)"
+
+# NOTE: the core MiniMax-Music3 / ACE-Step node modules ship *inside* ComfyUI at this pinned
+# commit (release-locked to the core they run against), so they need no separate build-time import
+# guard. Importing them here would also FAIL a driverless build (CI included): comfy_extras
+# imports comfy.model_management, which eagerly calls torch.cuda.current_device() at import and
+# raises "Found no NVIDIA driver". They are verified at boot instead (main.py --cpu registers them;
+# the smoke test queries /object_info for MiniMaxMusic3TextEncode / EmptyMiniMaxMusic3LatentAudio).
 
 # Pre-seed on-boot node-dep markers for the baked packs so the entrypoint's install loop treats
 # them as already-satisfied (deps are in the image) and does not reinstall on every boot/recreate.
