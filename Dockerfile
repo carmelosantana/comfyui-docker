@@ -131,7 +131,7 @@ RUN pip install --no-cache-dir "onnx==1.22.0" && \
     python -c "import onnx, onnx.onnx_ml_pb2, s3tokenizer; print('onnx', onnx.__version__)"
 
 # Guard: comfyui-ollama's deps (ollama client + dotenv) must be importable in the baked env.
-RUN python -c "import ollama, dotenv; print('ollama', ollama.__version__)"
+RUN python -c "import ollama, dotenv; print('comfyui-ollama deps import OK')"
 
 # NOTE: the core MiniMax-Music3 / ACE-Step node modules ship *inside* ComfyUI at this pinned
 # commit (release-locked to the core they run against), so they need no separate build-time import
