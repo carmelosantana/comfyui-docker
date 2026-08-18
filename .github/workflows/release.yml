@@ -1,0 +1,33 @@
+name: Auto-release on bump merge
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dated-release:
+    # Only fire when the merged commit is an automated ComfyUI bump. Human merges cut releases manually.
+    if: "${{ startsWith(github.event.head_commit.message, 'chore: bump ComfyUI') }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create dated tag + release
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_TOKEN }}
+        run: |
+          set -euo pipefail
+          base="v$(date -u +%y.%m.%d)"
+          tag="$base"
+          n=1
+          # Same-day collision: append .1, .2, … until the tag is free (checked against remote tags).
+          while git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; do
+            tag="${base}.${n}"; n=$((n+1))
+          done
+          echo "Cutting release $tag"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
