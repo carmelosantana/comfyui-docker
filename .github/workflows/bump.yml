@@ -38,10 +38,16 @@ jobs:
         if: steps.check.outputs.changed == '1'
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.BUMP_TOKEN }}
           branch: bump/comfyui-${{ steps.check.outputs.latest }}
           title: "chore: bump ComfyUI to ${{ steps.check.outputs.latest_tag }}"
           body: |
             Automated bump from ComfyUI ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}.
             Merging triggers a rebuild + publish of `latest` and the pinned version tags.
           commit-message: "chore: bump ComfyUI to ${{ steps.check.outputs.latest_tag }}"
+
+      - name: Enable auto-merge on the bump PR
+        if: steps.check.outputs.changed == '1'
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_TOKEN }}
+        run: gh pr merge --auto --squash "bump/comfyui-${{ steps.check.outputs.latest }}"
