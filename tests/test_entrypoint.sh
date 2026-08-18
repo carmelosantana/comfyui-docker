@@ -50,6 +50,9 @@ assert_true '! echo "$chown_list" | grep -qx "$COMFYUI_DIR/custom_nodes"' "does 
 CUSTOM_NODES_DIR="$workdir/cn2"; mkdir -p "$CUSTOM_NODES_DIR/PackA"
 echo "somepkg==1.0" > "$CUSTOM_NODES_DIR/PackA/requirements.txt"
 mkdir -p "$CUSTOM_NODES_DIR/PackB"; printf 'open("%s","w")\n' "$workdir/installpy.marker" > "$CUSTOM_NODES_DIR/PackB/install.py"
+# remove_stale_manager backs a v3 Manager clone up to ComfyUI-Manager.bak; that backup is never
+# loaded by ComfyUI, so the install loop must skip it instead of reinstalling its deps every boot.
+mkdir -p "$CUSTOM_NODES_DIR/ComfyUI-Manager.bak"; echo "matrix-nio==0.0" > "$CUSTOM_NODES_DIR/ComfyUI-Manager.bak/requirements.txt"
 NODE_DEPS_STATE_DIR="$workdir/state"          # ephemeral (NOT under the custom_nodes mount)
 pipbin="$workdir/bin"; mkdir -p "$pipbin"
 cat > "$pipbin/pip"    <<'EOF'
@@ -67,6 +70,8 @@ export PY_LOG="$workdir/py.log";   : > "$PY_LOG"
 PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
 assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "PackA reqs installed on first run"
 assert_eq "1" "$(grep -c 'install.py' "$PY_LOG")"              "PackB install.py run on first run"
+assert_eq "0" "$(grep -c 'ComfyUI-Manager.bak/requirements.txt' "$PIP_LOG")" "Manager .bak backup deps NOT installed"
+assert_true '[ ! -f "$NODE_DEPS_STATE_DIR/ComfyUI-Manager.bak.hash" ]' "Manager .bak backup not tracked"
 assert_true '[ -f "$NODE_DEPS_STATE_DIR/PackA.hash" ]'         "PackA hash marker written"
 PATH="$pipbin:$PATH" FORCE_NODE_REQS="" install_node_requirements
 assert_eq "1" "$(grep -c 'PackA/requirements.txt' "$PIP_LOG")" "unchanged pack is a no-op second run"
