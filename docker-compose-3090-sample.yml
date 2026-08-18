@@ -6,7 +6,7 @@ name: comfyui-docker
 services:
   comfyui:
     image: ghcr.io/carmelosantana/comfyui-docker:${IMAGE_TAG:-latest}
-    container_name: comfyui-lecode
+    container_name: comfyui-docker
     restart: unless-stopped
     extra_hosts:
       - "ollama:host-gateway"
@@ -34,6 +34,7 @@ services:
       SEED_AUDIO_NODES: "${SEED_AUDIO_NODES:-1}"
       SEED_VIDEO_NODES: "${SEED_VIDEO_NODES:-1}"
       SEED_HELPER_NODES: "${SEED_HELPER_NODES:-1}"
+      SEED_LLM_NODES: "${SEED_LLM_NODES:-1}"
     ports:
       - "8188:8188"
     volumes:

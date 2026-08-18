@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.8.0 (August 17, 2026) — Ultimate creator image
+
+- Bump ComfyUI `v0.29.0` → `v0.33.1`, which ships **native MiniMax-Music3** text-to-music
+  (`MiniMaxMusic3TextEncode`, `EmptyMiniMaxMusic3LatentAudio`) as core nodes. **ACE-Step** 1.0/1.5
+  stay core. No pack or baked weights for either — weights download into the `models` mount
+  (see README "Model weights").
+- Bake the [comfyui-ollama](https://github.com/stavsap/comfyui-ollama) node pack (in-graph Ollama
+  LLM nodes) under a new **`llm`** seeding category. Toggle with `SEED_LLM_NODES` (default `1`),
+  wired across the entrypoint, all compose samples, and `.env.example`. Pins `ollama==0.6.0`.
+- Add build-time import guards for the core MiniMax/ACE modules and the comfyui-ollama deps so a
+  future ComfyUI bump that breaks them fails the build.
+- Folds in the previously-unmerged protobuf/onnx fixes (v0.7.2–v0.7.4): `onnx==1.22.0` pin, on-boot
+  `protobuf>=6.31.1` re-assertion, and a root-owned persistent `PIP_CACHE_DIR`.
+
+## v0.7.4 (July 30, 2026)
+
+- Fix the persistent pip cache silently disabling itself on every boot. The on-boot custom-node
+  install loop runs pip as **root**, but `chown_app_dirs` chowned `PIP_CACHE_DIR` to the runtime
+  user (1000) — and pip refuses a cache dir it doesn't own (`check_path_owner`), logging *"The
+  directory ... is not owned or is not writable by the current user. The cache has been disabled"*
+  and re-downloading every wheel each boot. The pip cache is root-only (the runtime user never runs
+  pip), so `create_cache_dirs` now keeps it root-owned and `chown_app_dirs` no longer chowns it to
+  the runtime user. The HuggingFace and torch caches stay user-owned (main.py writes weights there
+  as the runtime user). Verified: root-owned cache → pip caches wheels; user-owned → disabled.
+
+## v0.7.3 (July 30, 2026)
+
+- Actually fix the protobuf gencode/runtime skew on real deployments. v0.7.2 pinned onnx in the
+  **image**, but that can't survive a boot: the entrypoint's on-boot `pip install -r requirements.txt`
+  loop runs user-added packs' requirements, and at least one (`comfyui-rmbg`, pinning
+  `protobuf<6.0.0`) **downgrades protobuf to 5.29.6 on every fresh boot** — after the image is built.
+  The baked stack's generated code (onnx, tensorboard, WanVideoWrapper's FantasyPortrait) targets
+  protobuf gencode 6.31.1, so the downgrade reintroduces `VersionError: incompatible Protobuf
+  Gencode/Runtime versions` and silently breaks ChatterBox TTS again.
+- The entrypoint now re-asserts a compatible protobuf runtime (`>=6.31.1`, floor set by
+  `PROTOBUF_MIN_VERSION`) **after** the custom-node loop, so a user pack's downgrade can't persist.
+  It's a cheap version-check no-op when protobuf is already current, keeps the install loop intact,
+  and — verified against a reproduction of the deployed failure — restores clean imports for onnx,
+  s3tokenizer, tensorboard, onnxruntime, and mediapipe (moving protobuf *up* also clears the
+  `comfyui-rmbg`/tensorboard site that pinning onnx down could not).
+
+## v0.7.2 (July 29, 2026)
+
+- Fix a protobuf/onnx version skew that silently broke ChatterBox TTS and threw `VersionError`
+  at boot on WanVideoWrapper (FantasyPortrait) and comfyui-rmbg. onnx and protobuf are both
+  unpinned transitives (onnx arrives via `s3tokenizer`, pulled by TTS-Audio-Suite's `install.py`,
+  which declares a bare `onnx`), so each rebuild resolves them independently. One unlucky pairing
+  shipped onnx 1.18 (protobuf **gencode 6.31.1**) against a protobuf **runtime 5.29.6**, so
+  `import onnx` raised `Detected incompatible Protobuf Gencode/Runtime versions`. Worse, TTS's
+  `UnifiedTTSTextNode` swallowed the exception and returned a **silent** audio track, so jobs
+  reported success while producing no speech (masking any downstream lip-sync). Fixed by pinning
+  `onnx==1.22.0` — a current release whose generated code carries no runtime-version guard, so it
+  imports against whatever protobuf resolves to and the skew cannot recur. protobuf, onnxruntime,
+  tensorboard, descript-audiotools and every other consumer are left untouched. The pin lives in
+  the image, so it survives a container recreate.
+
 ## v0.7.1 (July 29, 2026)
 
 - Fix seeded-pack ownership for packs that **already exist** in `custom_nodes`. The v0.7.0 chown

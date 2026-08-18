@@ -84,9 +84,12 @@ chown_app_dirs() {
     # The lazy-download cache lives under the (excluded) models mount. main.py runs as the target
     # user, so weights it downloads are already user-owned; only the root-created cache root dirs
     # need fixing. Shallow-chown just those — never recurse (the cache grows to many GB).
+    # HF/torch caches are written by main.py AS the runtime user, so they must be user-owned.
+    # PIP_CACHE_DIR is deliberately excluded: the on-boot install loop runs pip as root, and pip
+    # refuses (disables) a cache dir it doesn't own (check_path_owner). It is kept root-owned by
+    # create_cache_dirs instead — the runtime user never runs pip, so it needs no access to it.
     local cachedir
-    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
-                    "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"; do
+    for cachedir in "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}"; do
         [ -e "$cachedir" ] && chown "$uid:$gid" "$cachedir" 2>/dev/null || true
     done
     # Shallow chown of the app root and its top-level files (not the mounts within).
@@ -130,7 +133,34 @@ install_node_requirements() {
     done
 }
 
-# Map a baked pack directory name to its seeding category (audio|video|helper), or "" if
+# Re-assert a protobuf runtime new enough for the baked stack, AFTER the custom-node install loop.
+# Some user-added packs pin an old protobuf in their requirements.txt (e.g. comfyui-rmbg pins
+# protobuf<6) and downgrade it on every fresh boot. The baked stack — onnx, tensorboard, and packs
+# like WanVideoWrapper's FantasyPortrait — ships generated code targeting protobuf gencode 6.31.1,
+# which raises "incompatible Protobuf Gencode/Runtime versions" at import when the runtime is older.
+# An image-level pin can't survive the loop, so we correct it here instead of disabling the loop.
+# Runs as root (same as the loop). Cheap no-op when protobuf is already >= the floor or absent.
+PROTOBUF_MIN_VERSION="${PROTOBUF_MIN_VERSION:-6.31.1}"
+ensure_protobuf_runtime() {
+    if python - "$PROTOBUF_MIN_VERSION" <<'PY'
+import sys
+try:
+    from importlib.metadata import version
+    cur = tuple(int(p) for p in version("protobuf").split(".")[:3])
+    floor = tuple(int(p) for p in sys.argv[1].split(".")[:3])
+    sys.exit(0 if cur >= floor else 1)
+except Exception:
+    sys.exit(0)  # protobuf absent or unparsable: nothing to re-assert
+PY
+    then
+        return 0
+    fi
+    echo "Re-asserting protobuf>=$PROTOBUF_MIN_VERSION (a custom-node pack downgraded it)..."
+    pip install --no-cache-dir "protobuf>=$PROTOBUF_MIN_VERSION" \
+        || echo "WARN: could not re-assert protobuf>=$PROTOBUF_MIN_VERSION (continuing)"
+}
+
+# Map a baked pack directory name to its seeding category (audio|video|helper|llm), or "" if
 # uncategorized. Categories let a user disable a whole class of baked packs via SEED_{CAT}_NODES
 # without touching the others. Adding a baked pack (in the Dockerfile) should add it here too.
 baked_node_category() {
@@ -138,17 +168,19 @@ baked_node_category() {
         TTS-Audio-Suite) echo audio ;;
         ComfyUI-WanVideoWrapper|ComfyUI-VideoHelperSuite|ComfyUI-Frame-Interpolation) echo video ;;
         ComfyUI-KJNodes|ComfyUI_essentials|ComfyUI_HuggingFace_Downloader) echo helper ;;
+        comfyui-ollama) echo llm ;;
         *) echo "" ;;
     esac
 }
 
-# Whether a seeding category is enabled. Each SEED_{AUDIO,VIDEO,HELPER}_NODES defaults to 1 (on).
+# Whether a seeding category is enabled. Each SEED_{AUDIO,VIDEO,HELPER,LLM}_NODES defaults to 1 (on).
 # An uncategorized pack ("") is always enabled — it is gated only by the master SEED_BAKED_NODES.
 category_enabled() {
     case "$1" in
         audio)  [ "${SEED_AUDIO_NODES:-1}"  = "1" ] ;;
         video)  [ "${SEED_VIDEO_NODES:-1}"  = "1" ] ;;
         helper) [ "${SEED_HELPER_NODES:-1}" = "1" ] ;;
+        llm)    [ "${SEED_LLM_NODES:-1}"    = "1" ] ;;
         *)      return 0 ;;
     esac
 }
@@ -221,6 +253,11 @@ write_baked_node_markers() {
 create_cache_dirs() {
     mkdir -p "${HF_HOME:-$HF_CACHE_DIR/huggingface}" "${TORCH_HOME:-$HF_CACHE_DIR/torch}" \
              "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}"
+    # The on-boot custom-node install loop runs pip as root; pip refuses (and disables) a cache dir
+    # it does not own, warning "not owned or is not writable by the current user ... use sudo's -H".
+    # This cache is root-only (the runtime user never runs pip), so keep it root-owned — repairing
+    # any dir a prior image chowned to the runtime user (which is what silently disabled the cache).
+    chown 0:0 "${PIP_CACHE_DIR:-$HF_CACHE_DIR/pip}" 2>/dev/null || true
 }
 
 # Clone the supported node packs into custom_nodes when the user opts in with
@@ -316,6 +353,9 @@ main() {
     maybe_bootstrap_nodes
     echo "Installing custom-node requirements (once)..."
     install_node_requirements
+    # A user pack in the loop above may have downgraded protobuf below what the baked stack's
+    # generated code (onnx/tensorboard/FantasyPortrait, gencode 6.31.1) needs. Correct it now.
+    ensure_protobuf_runtime
 
     mapfile -t COMFY_ARGS < <(apply_sage_attention "$@")
 

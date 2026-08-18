@@ -51,6 +51,13 @@ can turn off with an env var; `SEED_BAKED_NODES=0` disables all seeding at once.
 | [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | helper (`SEED_HELPER_NODES`) | Helper nodes (resize/mask/get-set) the Wan graphs need |
 | [ComfyUI_essentials](https://github.com/cubiq/ComfyUI_essentials) | helper (`SEED_HELPER_NODES`) | Common utility nodes many community workflows depend on |
 | [ComfyUI_HuggingFace_Downloader](https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader) | helper (`SEED_HELPER_NODES`) | In-graph HuggingFace model downloads |
+| [comfyui-ollama](https://github.com/stavsap/comfyui-ollama) | llm (`SEED_LLM_NODES`) | In-graph Ollama LLM nodes (`OllamaGenerateV2`, vision, etc.) for prompt-building / captioning. Needs a reachable Ollama server (host or network) |
+
+> **Audio models are ComfyUI core (no pack to seed):** on ComfyUI `0.33.1` the **MiniMax-Music3**
+> (`MiniMaxMusic3TextEncode`, `EmptyMiniMaxMusic3LatentAudio`) and **ACE-Step** 1.0/1.5
+> (`TextEncodeAceStepAudio`, `EmptyAceStepLatentAudio`, and the 1.5 variants) text-to-music nodes
+> ship in ComfyUI itself — no custom node is seeded. Their model weights are downloaded separately
+> (see [model weights](#model-weights-not-baked)).
 
 > **Node code vs. model weights:** baking a pack installs its **nodes** (they appear in ComfyUI's
 > menu), not the model checkpoints/LoRAs it uses. Those are downloaded on demand into the persistent
@@ -76,7 +83,7 @@ in-container), `git`, `aria2` (fast model downloads), `espeak-ng` (phonemizer fo
 `libgl1`/`libgl1-mesa-glx`/`libglib2.0-0` libraries OpenCV needs.
 
 **Python (baked into the conda env, so they survive a container recreate):** `accelerate`,
-`transformers`, `opencv-python-headless`, `imageio-ffmpeg`, `deepdiff`, `ollama`, `onnxruntime`,
+`transformers`, `opencv-python-headless`, `imageio-ffmpeg`, `deepdiff`, `ollama` (0.6.0) + `dotenv`, `onnxruntime`,
 `huggingface_hub[cli]`, plus everything TTS-Audio-Suite and Frame-Interpolation require. SageAttention
 stays available on the `-sage` tags (compiled from pinned upstream source, not a prebuilt wheel).
 
@@ -87,6 +94,19 @@ keeps the image lean). TTS engines and other packs lazy-download their weights o
 `HF_HOME`/`TORCH_HOME`, which default to `models/.cache/…` inside the persistent `models` mount — so
 first-use downloads survive `docker compose down && up`. Larger checkpoints (Wan, SD) you fetch
 yourself via ComfyUI-Manager or the HuggingFace Downloader into the `models` mount.
+
+**MiniMax-Music3 weights** (ComfyUI core node; download from HF `Comfy-Org/MiniMax-Music-3` into the
+`models` mount — pick one DiT, fp16 for quality or int8 for lower VRAM):
+
+| File | Target dir |
+| --- | --- |
+| `minimax_music3_dit_fp16.safetensors` (~4.9 GB) | `models/diffusion_models/` |
+| `minimax_music3_dit_int8_convrot.safetensors` (~2.5 GB) | `models/diffusion_models/` |
+| `minimax_music3_text_encoder_pruned_int8_convrot.safetensors` | `models/text_encoders/` |
+| `minimax_music3_dav.safetensors` (audio VAE) | `models/vae/` |
+
+**ACE-Step** (also core) uses `ace_step_v1_3.5b.safetensors` in `models/checkpoints/`. On a 3090,
+MiniMax-Music3 needs dynamic VRAM enabled (fixed in ComfyUI 0.33.1's MiniMax + CUDA-Graphs work).
 
 ## Quick start (generic)
 
@@ -123,6 +143,7 @@ recreate.
 | `SEED_AUDIO_NODES` | `1` | Set `0` to skip the audio pack (TTS-Audio-Suite) |
 | `SEED_VIDEO_NODES` | `1` | Set `0` to skip the video packs (WanVideoWrapper, VideoHelperSuite, Frame-Interpolation) |
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip the helper packs (KJNodes, essentials, HuggingFace Downloader) |
+| `SEED_LLM_NODES` | `1` | Set `0` to skip the LLM pack (comfyui-ollama) |
 | `BOOTSTRAP_NODES` | unset | Set `1` to git-clone **extra** packs from `scripts/node-manifest.txt` on first boot. The supported packs are already baked in — this is only for additions |
 | `MANAGER_NETWORK_MODE` | `personal_cloud` | Manager v4 network mode, **enforced** into `user/__manager/config.ini` every boot. `personal_cloud` is **required** to unlock the install/model management API on a box that listens on `0.0.0.0` — Manager blocks those actions for `public`/`private`/`offline` on a non-loopback listen. Set to `public` to lock the box down when exposed publicly |
 | `MANAGER_SECURITY_LEVEL` | `normal` | Manager v4 security level, enforced into `user/__manager/config.ini` every boot. `normal` is the least-permissive level that still allows arbitrary git-URL node installs and arbitrary-URL model downloads via the API; `strong` blocks them |
@@ -148,6 +169,7 @@ The voice, video, and helper node packs listed in
 | `SEED_AUDIO_NODES` | `1` | Set `0` to skip TTS-Audio-Suite |
 | `SEED_VIDEO_NODES` | `1` | Set `0` to skip WanVideoWrapper, VideoHelperSuite, Frame-Interpolation |
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip KJNodes, essentials, HuggingFace Downloader |
+| `SEED_LLM_NODES` | `1` | Set `0` to skip comfyui-ollama |
 
 To add packs **beyond** the baked set, install them from ComfyUI-Manager, drop them into the
 `custom_nodes` mount, or list their git URLs in `scripts/node-manifest.txt` and set
