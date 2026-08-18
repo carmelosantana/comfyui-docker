@@ -111,7 +111,11 @@ install_node_requirements() {
     for dir in "$CUSTOM_NODES_DIR"/*; do
         [ -d "$dir" ] || continue
         name="$(basename "$dir")"
-        [ "$name" = "ComfyUI-Manager" ] && continue
+        # Skip the v3 Manager (Manager v4 is the pip package) and any *.bak backup left by
+        # remove_stale_manager — backups are never loaded, so installing their deps is wasted work.
+        case "$name" in
+            ComfyUI-Manager|*.bak) continue ;;
+        esac
         reqs="$dir/requirements.txt"
         inst="$dir/install.py"
         [ -f "$reqs" ] || [ -f "$inst" ] || continue
