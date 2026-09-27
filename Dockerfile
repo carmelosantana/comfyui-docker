@@ -11,11 +11,15 @@ ARG CUDNN_VERSION=9
 FROM pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-runtime AS base
 
 # ComfyUI is pinned by a ref (tag like "v0.29.0" or a commit SHA); Manager is pinned by a tag (v4+).
-ARG COMFYUI_REF=v0.33.1
+ARG COMFYUI_REF=v0.37.0
 ARG COMFYUI_MANAGER_VERSION=4.2.2
 
 # Keep COMFYUI_VERSION as an alias so CI version-extraction and image labels stay stable.
-ARG COMFYUI_VERSION=0.33.1
+ARG COMFYUI_VERSION=0.37.0
+
+# The base image's pip rejects pixeloe's platform_release marker on suffixed Linux
+# kernels (e.g. GitHub's 6.17.0-1022-azure). Newer vendored packaging handles it.
+ARG PIP_VERSION=26.2.1
 
 RUN apt-get update --assume-yes && \
     apt-get install --assume-yes --no-install-recommends \
@@ -41,6 +45,10 @@ RUN git clone https://github.com/Comfy-Org/ComfyUI.git /opt/comfyui && \
 RUN git clone https://github.com/Comfy-Org/ComfyUI-Manager.git /opt/comfyui-manager && \
     cd /opt/comfyui-manager && \
     git checkout "${COMFYUI_MANAGER_VERSION}"
+
+COPY tests/check_pip_markers.py /tmp/check_pip_markers.py
+RUN python -m pip install --no-cache-dir "pip==${PIP_VERSION}" && \
+    python /tmp/check_pip_markers.py && rm /tmp/check_pip_markers.py
 
 RUN pip install \
     --requirement /opt/comfyui/requirements.txt \

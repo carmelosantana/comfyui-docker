@@ -179,7 +179,26 @@ SemVer release; CalVer starts with the next one.)
   `COMFYUI_VERSION` to the latest ComfyUI release; CI builds + smoke-tests base and `-sage`; on green
   it auto-merges (moving `latest`/`latest-sage`) and a dated `vYY.MM.DD` release is cut with the
   pinned images. To pin a specific ComfyUI yourself, build with
-  `--target base --build-arg COMFYUI_REF=v0.33.1`. The `-sage` image is `docker build --target sage .`.
+  `--target base --build-arg COMFYUI_REF=v0.37.0 --build-arg COMFYUI_VERSION=0.37.0`.
+  The `-sage` image is `docker build --target sage .`.
+
+The weekly bump requires a repository Actions secret named **`BUMP_TOKEN`**. The owner must
+create a fine-grained PAT with resource owner `carmelosantana`, access only to `comfyui-docker`,
+and repository permissions **Contents: Read and write** and **Pull requests: Read and write**.
+**Workflows: Read and write** is needed only if the bump changes `.github/workflows`.
+Paste the token directly into GitHub's repository **Settings → Secrets and variables → Actions**;
+do not put it in an issue, chat, or file. A PAT is needed here so the generated PR triggers CI;
+PRs created with `GITHUB_TOKEN` do not trigger the normal pull-request workflows.
+
+Auto-merge also needs **Settings → General → Pull Requests → Allow auto-merge** and a protection
+rule for `main` under **Settings → Branches** with **Require status checks to pass before merging**:
+select both **`build`** and **`build-sage`** from GitHub Actions. These settings were already present
+on 2026-09-27; only `BUMP_TOKEN` was missing. The existing bump workflow enables auto-merge on its
+generated PRs, so adding the secret restores that existing behavior. Manual upgrade PRs still
+require the maintainer's merge decision.
+
+See [the v0.37.0 upgrade review](docs/upgrade-0.37.0.md) for compatibility changes and the
+approval-gated shared-GPU deployment checklist.
 
 ## Node packs on by default (and how to disable)
 
