@@ -37,6 +37,12 @@ The v0.37.0 notes mention frontend 1.53.6, but the tagged requirements pin 1.52.
 The Docker build follows the tagged requirements. Baked node installers can subsequently alter
 Python dependencies, so CI must actually boot both final images.
 
+The first CI attempt exposed an existing installer incompatibility: pip's vendored packaging
+raised `InvalidVersion: '6.17.0-1022-azure'` while evaluating pixeloe's platform marker.
+The base stage now pins pip 26.2.1 (PyPI release 2026-08-04). A four-case marker regression
+check reproduces the crash with pip 25.2 and passes with 26.2.1; the build runs that check
+before installing application dependencies. This also applies to the derived sage image.
+
 ## Validation and deployment gates
 
 1. PR CI builds both `comfyui-ci:smoke` and `comfyui-ci:sage`, boots each with `--cpu`, checks
