@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Bump ComfyUI `v0.37.0` → `v0.38.0`. Manager stays `4.2.2`, which v0.38.0 still pins in
+  `manager_requirements.txt`; Manager 4.3 has no fix for the stale node list, so there is no reason to
+  get ahead of upstream. Release review: ComfyUI dropped `torchaudio` from its requirements, but the
+  pytorch base image ships `torchaudio 2.9.1+cu128` and the build guard still imports it (TTS needs it).
+  `--use-sage-attention` and `attention_sage` are unchanged; the new per-block `comfy_attention`
+  metadata only applies to model files that carry it. New pins (`comfyui-frontend-package==1.53.6`,
+  `comfyui-workflow-templates==0.11.70`, `comfy-kitchen==0.2.36`) are vetted: 6–18 days old, not
+  yanked, pinned by upstream.
 - CI: the bump and release workflows fail fast with a clear error naming the missing `BUMP_TOKEN`
   secret and its permissions. The weekly bump has failed since 2026-09-14 because the secret was
   never added (`create-pull-request`: "Input 'token' not supplied").

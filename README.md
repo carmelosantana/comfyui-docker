@@ -183,7 +183,7 @@ SemVer release; CalVer starts with the next one.)
   `COMFYUI_VERSION` to the latest ComfyUI release; CI builds + smoke-tests base and `-sage`; on green
   it auto-merges (moving `latest`/`latest-sage`) and a dated `vYY.MM.DD` release is cut with the
   pinned images. To pin a specific ComfyUI yourself, build with
-  `--target base --build-arg COMFYUI_REF=v0.37.0 --build-arg COMFYUI_VERSION=0.37.0`.
+  `--target base --build-arg COMFYUI_REF=v0.38.0 --build-arg COMFYUI_VERSION=0.38.0`.
   The `-sage` image is `docker build --target sage .`.
 
 The weekly bump requires a repository Actions secret named **`BUMP_TOKEN`**. The owner must
