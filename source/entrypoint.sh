@@ -320,6 +320,41 @@ seed_manager_config() {
     _set_ini_key "$dest" security_level "$level"
     _set_ini_key "$dest" network_mode "$netmode"
     echo "Manager config enforced at $dest (security_level=$level, network_mode=$netmode)."
+    align_manager_channel "$dest"
+}
+
+# Print the URL of Manager's 'default' channel: MANAGER_CHANNEL_URL, else the user's channels.list
+# (what Manager reads), else the template shipped with the pinned Manager. Empty if none is found.
+manager_default_channel_url() {
+    if [ -n "${MANAGER_CHANNEL_URL:-}" ]; then
+        echo "$MANAGER_CHANNEL_URL"
+        return 0
+    fi
+    local f
+    for f in "$COMFYUI_DIR/user/__manager/channels.list" "$MANAGER_SRC/comfyui_manager/channels.list.template"; do
+        if [ -f "$f" ]; then
+            sed -n 's/^default:://p' "$f" | head -n 1 | tr -d '\r'
+            return 0
+        fi
+    done
+}
+
+# Keep Manager's node lists fresh. In pip-package mode Manager 4.2.x never fetches a list on lookup:
+# it reads user/__manager/cache/<hash(channel/file)>_<file>, else the list bundled in the wheel. Its
+# boot thread refreshes that cache (skipped when network_mode=offline, errors logged, not fatal) but
+# keys it on config channel_url — by default the legacy ltdrdata URL — while installs look up the
+# 'default' channel (the Comfy-Org URL). The hashes never match, so installs see the stale bundled
+# list. Pointing channel_url at the 'default' channel and keying the refresh on it closes the gap.
+align_manager_channel() {
+    local cfg="$1" url
+    url="$(manager_default_channel_url)"
+    if [ -z "$url" ]; then
+        echo "WARN: no Manager 'default' channel found; leaving channel_url unchanged."
+        return 0
+    fi
+    _set_ini_key "$cfg" channel_url "$url"
+    _set_ini_key "$cfg" default_cache_as_channel_url True
+    echo "Manager channel_url aligned to the 'default' channel ($url)."
 }
 
 # Transform the ComfyUI arg list for the sage-attention toggle. When USE_SAGE_ATTENTION=1,

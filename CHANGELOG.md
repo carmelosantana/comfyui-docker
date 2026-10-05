@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix ComfyUI-Manager not seeing node packs added upstream after its release (e.g.
+  `OliverCrosby/ComfyUI-Universal-Seamless-Tiles` → "not found in [default, remote]"). In pip mode
+  Manager 4.2.x never fetches lists on lookup; it reads a cache keyed by `hash(channel_url/file)` or
+  falls back to the list bundled in the wheel. Its boot refresh keyed that cache on the legacy
+  `ltdrdata` `channel_url`, while installs look up the Comfy-Org `default` channel, so the hashes
+  never matched. The entrypoint now enforces `channel_url` = the `default` channel URL and
+  `default_cache_as_channel_url = True` every boot (override: `MANAGER_CHANNEL_URL`). Manager 4.3
+  has the same code path, so a Manager bump would not fix this.
 - Switch image versioning to **CalVer `YY.MM.DD`** (replacing SemVer); keep `latest`/`latest-sage`
   and the `comfyui-<ver>` axis. `v0.8.0` is the last SemVer tag.
 - Automate the weekly ComfyUI bump end to end: PAT-authed PR (`BUMP_TOKEN`) → CI → auto-merge → a
