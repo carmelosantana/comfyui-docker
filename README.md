@@ -52,6 +52,8 @@ can turn off with an env var; `SEED_BAKED_NODES=0` disables all seeding at once.
 | [ComfyUI_essentials](https://github.com/cubiq/ComfyUI_essentials) | helper (`SEED_HELPER_NODES`) | Common utility nodes many community workflows depend on |
 | [ComfyUI_HuggingFace_Downloader](https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader) | helper (`SEED_HELPER_NODES`) | In-graph HuggingFace model downloads |
 | [comfyui-ollama](https://github.com/stavsap/comfyui-ollama) | llm (`SEED_LLM_NODES`) | In-graph Ollama LLM nodes (`OllamaGenerateV2`, vision, etc.) for prompt-building / captioning. Needs a reachable Ollama server (host or network) |
+| [ComfyUI-AdvancedTiling](https://github.com/JosefKuchar/ComfyUI-AdvancedTiling) | texture (`SEED_TEXTURE_NODES`) | Seamless/tileable generation via circular padding and toroidal attention (GPL-3.0). Seeded as `comfyui-advanced-tiling`, the dir Manager installs it to |
+| [ComfyUI-Universal-Seamless-Tiles](https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles) | texture (`SEED_TEXTURE_NODES`) | Seamless tiling for DiT models (Flux and friends) |
 
 > **Audio models are ComfyUI core (no pack to seed):** on ComfyUI `0.33.1` the **MiniMax-Music3**
 > (`MiniMaxMusic3TextEncode`, `EmptyMiniMaxMusic3LatentAudio`) and **ACE-Step** 1.0/1.5
@@ -144,6 +146,7 @@ recreate.
 | `SEED_VIDEO_NODES` | `1` | Set `0` to skip the video packs (WanVideoWrapper, VideoHelperSuite, Frame-Interpolation) |
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip the helper packs (KJNodes, essentials, HuggingFace Downloader) |
 | `SEED_LLM_NODES` | `1` | Set `0` to skip the LLM pack (comfyui-ollama) |
+| `SEED_TEXTURE_NODES` | `1` | Set `0` to skip the texture tiling packs (AdvancedTiling, Universal-Seamless-Tiles) |
 | `BOOTSTRAP_NODES` | unset | Set `1` to git-clone **extra** packs from `scripts/node-manifest.txt` on first boot. The supported packs are already baked in — this is only for additions |
 | `MANAGER_NETWORK_MODE` | `personal_cloud` | Manager v4 network mode, **enforced** into `user/__manager/config.ini` every boot. `personal_cloud` is **required** to unlock the install/model management API on a box that listens on `0.0.0.0` — Manager blocks those actions for `public`/`private`/`offline` on a non-loopback listen. Set to `public` to lock the box down when exposed publicly |
 | `MANAGER_SECURITY_LEVEL` | `normal` | Manager v4 security level, enforced into `user/__manager/config.ini` every boot. `normal` is the least-permissive level that still allows arbitrary git-URL node installs and arbitrary-URL model downloads via the API; `strong` blocks them |
@@ -203,7 +206,7 @@ approval-gated shared-GPU deployment checklist.
 
 ## Node packs on by default (and how to disable)
 
-The voice, video, and helper node packs listed in
+The voice, video, helper, LLM, and texture node packs listed in
 [What's baked into the image](#whats-baked-into-the-image) are **baked in and on by default** — no
 `BOOTSTRAP_NODES` needed. Turn a category off with an env var when you don't need it:
 
@@ -214,6 +217,7 @@ The voice, video, and helper node packs listed in
 | `SEED_VIDEO_NODES` | `1` | Set `0` to skip WanVideoWrapper, VideoHelperSuite, Frame-Interpolation |
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip KJNodes, essentials, HuggingFace Downloader |
 | `SEED_LLM_NODES` | `1` | Set `0` to skip comfyui-ollama |
+| `SEED_TEXTURE_NODES` | `1` | Set `0` to skip AdvancedTiling and Universal-Seamless-Tiles |
 
 To add packs **beyond** the baked set, install them from ComfyUI-Manager, drop them into the
 `custom_nodes` mount, or list their git URLs in `scripts/node-manifest.txt` and set

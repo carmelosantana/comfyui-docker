@@ -141,6 +141,18 @@ RUN pip install --no-cache-dir "onnx==1.22.0" && \
 # Guard: comfyui-ollama's deps (ollama client + dotenv) must be importable in the baked env.
 RUN python -c "import ollama, dotenv; print('comfyui-ollama deps import OK')"
 
+# Texture tiling packs (seamless/tileable textures). No Python deps (AdvancedTiling's optional `ray`
+# import is guarded), so their own layer leaves the heavy dep layers above cached. Staged under the
+# dir names Manager installs to (cnr id / repo name) so an existing Manager install is recognised.
+# Pins vetted 2026-10-05 (no subprocess/network/eval/pickle); re-vet if either changes.
+ARG ADVANCED_TILING_REF=3c35bc90400ae53f7e15a15295ffdf1fbeae17cf
+ARG SEAMLESS_TILES_REF=c10836d91f4141d9f69cdd6ed53e40fddd71a869
+RUN cd /opt/comfyui-baked-nodes && \
+    git clone https://github.com/JosefKuchar/ComfyUI-AdvancedTiling.git comfyui-advanced-tiling && \
+    git -C comfyui-advanced-tiling checkout "${ADVANCED_TILING_REF}" && \
+    git clone https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles.git ComfyUI-Universal-Seamless-Tiles && \
+    git -C ComfyUI-Universal-Seamless-Tiles checkout "${SEAMLESS_TILES_REF}"
+
 # NOTE: the core MiniMax-Music3 / ACE-Step node modules ship *inside* ComfyUI at this pinned
 # commit (release-locked to the core they run against), so they need no separate build-time import
 # guard. Importing them here would also FAIL a driverless build (CI included): comfy_extras

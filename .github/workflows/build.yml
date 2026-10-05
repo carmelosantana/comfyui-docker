@@ -63,6 +63,7 @@ jobs:
           case "$ver" in 4.*|v4.*) echo "Manager v4+ OK" ;; *) echo "Manager is NOT v4+: $ver"; docker logs smoke; exit 1 ;; esac
           python3 tests/check_sam3d_nodes.py || { docker logs smoke; exit 1; }
           python3 tests/check_manager_channel.py || { docker logs smoke; exit 1; }
+          python3 tests/check_texture_nodes.py || { docker logs smoke; exit 1; }
           docker rm -f smoke
 
       - name: Log in to GHCR
@@ -164,6 +165,7 @@ jobs:
           echo "sageattention present (import/kernel exec validated on the 3090, not CPU CI)"
           python3 tests/check_sam3d_nodes.py || { docker logs smoke-sage; exit 1; }
           python3 tests/check_manager_channel.py || { docker logs smoke-sage; exit 1; }
+          python3 tests/check_texture_nodes.py || { docker logs smoke-sage; exit 1; }
           docker rm -f smoke-sage
 
       - name: Log in to GHCR

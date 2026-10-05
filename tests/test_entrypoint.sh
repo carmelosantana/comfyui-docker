@@ -384,4 +384,39 @@ COMFYUI_DIR="$workdir/opt_mgr_nochan"; mkdir -p "$COMFYUI_DIR"
 assert_eq "0" "$rc" "seed_manager_config survives a missing channels source"
 assert_true '! grep -q "^channel_url" "$COMFYUI_DIR/user/__manager/config.ini"' "channel_url not invented when no source"
 
+# --- Texture category: the two seamless-tiling packs, gated by SEED_TEXTURE_NODES ---
+# Baked under the dir names Manager itself installs to (cnr id for AdvancedTiling, repo name for the
+# git-only Universal-Seamless-Tiles), so a Manager-installed copy is recognised, never doubled.
+assert_eq "texture" "$(baked_node_category comfyui-advanced-tiling)"          "comfyui-advanced-tiling -> texture"
+assert_eq "texture" "$(baked_node_category ComfyUI-Universal-Seamless-Tiles)" "Universal-Seamless-Tiles -> texture"
+
+BAKED_NODES_DIR="$workdir/baked_tex"
+for p in comfyui-advanced-tiling ComfyUI-Universal-Seamless-Tiles ComfyUI-KJNodes; do
+    mkdir -p "$BAKED_NODES_DIR/$p"; echo baked > "$BAKED_NODES_DIR/$p/marker"
+done
+
+CUSTOM_NODES_DIR="$workdir/cn_tex_all"; mkdir -p "$CUSTOM_NODES_DIR"
+( unset SEED_BAKED_NODES SEED_TEXTURE_NODES; seed_baked_nodes )
+assert_true '[ -d "$CUSTOM_NODES_DIR/comfyui-advanced-tiling" ]'          "default seeds AdvancedTiling"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-Universal-Seamless-Tiles" ]' "default seeds Universal-Seamless-Tiles"
+
+CUSTOM_NODES_DIR="$workdir/cn_tex_off"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_TEXTURE_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/comfyui-advanced-tiling" ]'          "SEED_TEXTURE_NODES=0 skips AdvancedTiling"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Universal-Seamless-Tiles" ]' "SEED_TEXTURE_NODES=0 skips Universal-Seamless-Tiles"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-KJNodes" ]'                    "SEED_TEXTURE_NODES=0 still seeds helper"
+
+# The live box already has AdvancedTiling (Manager nightly install at the same commit): left as is.
+CUSTOM_NODES_DIR="$workdir/cn_tex_live"; mkdir -p "$CUSTOM_NODES_DIR/comfyui-advanced-tiling"
+echo live > "$CUSTOM_NODES_DIR/comfyui-advanced-tiling/marker"
+seed_baked_nodes
+assert_eq "live" "$(cat "$CUSTOM_NODES_DIR/comfyui-advanced-tiling/marker")" "existing Manager-installed AdvancedTiling not clobbered"
+
+# A copy under another known name (git clone by repo name, or Manager-disabled) is not doubled.
+CUSTOM_NODES_DIR="$workdir/cn_tex_alias"; mkdir -p "$CUSTOM_NODES_DIR/ComfyUI-AdvancedTiling" \
+    "$CUSTOM_NODES_DIR/.disabled/ComfyUI-Universal-Seamless-Tiles"
+seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/comfyui-advanced-tiling" ]'          "AdvancedTiling git clone under repo name -> no second copy"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Universal-Seamless-Tiles" ]' "Manager-disabled pack is not re-seeded"
+
 finish

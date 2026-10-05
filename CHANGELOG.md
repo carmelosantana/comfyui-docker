@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bake two texture tiling packs under a new **`texture`** seeding category (`SEED_TEXTURE_NODES`,
+  default `1`): [ComfyUI-AdvancedTiling](https://github.com/JosefKuchar/ComfyUI-AdvancedTiling) @
+  `3c35bc9` and [ComfyUI-Universal-Seamless-Tiles](https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles)
+  @ `c10836d`. No Python deps. They are staged under the dir names Manager installs to
+  (`comfyui-advanced-tiling`, `ComfyUI-Universal-Seamless-Tiles`), and seeding also skips a pack found
+  under a known alias or in `custom_nodes/.disabled/`, so an existing install is never clobbered or doubled.
 - Fix ComfyUI-Manager not seeing node packs added upstream after its release (e.g.
   `OliverCrosby/ComfyUI-Universal-Seamless-Tiles` → "not found in [default, remote]"). In pip mode
   Manager 4.2.x never fetches lists on lookup; it reads a cache keyed by `hash(channel_url/file)` or
