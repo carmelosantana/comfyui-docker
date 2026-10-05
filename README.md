@@ -193,6 +193,9 @@ and repository permissions **Contents: Read and write** and **Pull requests: Rea
 Paste the token directly into GitHub's repository **Settings → Secrets and variables → Actions**;
 do not put it in an issue, chat, or file. A PAT is needed here so the generated PR triggers CI;
 PRs created with `GITHUB_TOKEN` do not trigger the normal pull-request workflows.
+If the secret is missing, the bump and release workflows now stop at a **Require BUMP_TOKEN** step
+that names the secret and its permissions (previously `create-pull-request` failed with
+"Input 'token' not supplied").
 
 Auto-merge also needs **Settings → General → Pull Requests → Allow auto-merge** and a protection
 rule for `main` under **Settings → Branches** with **Require status checks to pass before merging**:

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- CI: the bump and release workflows fail fast with a clear error naming the missing `BUMP_TOKEN`
+  secret and its permissions. The weekly bump has failed since 2026-09-14 because the secret was
+  never added (`create-pull-request`: "Input 'token' not supplied").
 - Bake two texture tiling packs under a new **`texture`** seeding category (`SEED_TEXTURE_NODES`,
   default `1`): [ComfyUI-AdvancedTiling](https://github.com/JosefKuchar/ComfyUI-AdvancedTiling) @
   `3c35bc9` and [ComfyUI-Universal-Seamless-Tiles](https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles)

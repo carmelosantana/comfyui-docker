@@ -17,6 +17,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Require BUMP_TOKEN
+        env:
+          BUMP_TOKEN: ${{ secrets.BUMP_TOKEN }}
+        run: |
+          if [ -z "$BUMP_TOKEN" ]; then
+            echo "::error title=Missing secret::BUMP_TOKEN repo secret is not set. Add a fine-grained PAT (repo carmelosantana/comfyui-docker; Contents: read/write, Pull requests: read/write) under Settings > Secrets and variables > Actions. GITHUB_TOKEN cannot be used: PRs, merges and tags it creates do not trigger build.yml."
+            exit 1
+          fi
+
       - name: Create dated tag + release
         env:
           GH_TOKEN: ${{ secrets.BUMP_TOKEN }}

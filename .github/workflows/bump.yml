@@ -34,6 +34,16 @@ jobs:
           sed -i "s/^ARG COMFYUI_REF=.*/ARG COMFYUI_REF=${{ steps.check.outputs.latest_tag }}/" Dockerfile
           sed -i "s/^ARG COMFYUI_VERSION=.*/ARG COMFYUI_VERSION=${{ steps.check.outputs.latest }}/" Dockerfile
 
+      - name: Require BUMP_TOKEN
+        if: steps.check.outputs.changed == '1'
+        env:
+          BUMP_TOKEN: ${{ secrets.BUMP_TOKEN }}
+        run: |
+          if [ -z "$BUMP_TOKEN" ]; then
+            echo "::error title=Missing secret::BUMP_TOKEN repo secret is not set. Add a fine-grained PAT (repo carmelosantana/comfyui-docker; Contents: read/write, Pull requests: read/write) under Settings > Secrets and variables > Actions. GITHUB_TOKEN cannot be used: PRs, merges and tags it creates do not trigger build.yml."
+            exit 1
+          fi
+
       - name: Open PR
         if: steps.check.outputs.changed == '1'
         uses: peter-evans/create-pull-request@v7
