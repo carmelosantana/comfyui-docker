@@ -11,11 +11,11 @@ ARG CUDNN_VERSION=9
 FROM pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-runtime AS base
 
 # ComfyUI is pinned by a ref (tag like "v0.29.0" or a commit SHA); Manager is pinned by a tag (v4+).
-ARG COMFYUI_REF=v0.37.0
+ARG COMFYUI_REF=v0.38.0
 ARG COMFYUI_MANAGER_VERSION=4.2.2
 
 # Keep COMFYUI_VERSION as an alias so CI version-extraction and image labels stay stable.
-ARG COMFYUI_VERSION=0.37.0
+ARG COMFYUI_VERSION=0.38.0
 
 # The base image's pip rejects pixeloe's platform_release marker on suffixed Linux
 # kernels (e.g. GitHub's 6.17.0-1022-azure). Newer vendored packaging handles it.
@@ -140,6 +140,18 @@ RUN pip install --no-cache-dir "onnx==1.22.0" && \
 
 # Guard: comfyui-ollama's deps (ollama client + dotenv) must be importable in the baked env.
 RUN python -c "import ollama, dotenv; print('comfyui-ollama deps import OK')"
+
+# Texture tiling packs (seamless/tileable textures). No Python deps (AdvancedTiling's optional `ray`
+# import is guarded), so their own layer leaves the heavy dep layers above cached. Staged under the
+# dir names Manager installs to (cnr id / repo name) so an existing Manager install is recognised.
+# Pins vetted 2026-10-05 (no subprocess/network/eval/pickle); re-vet if either changes.
+ARG ADVANCED_TILING_REF=3c35bc90400ae53f7e15a15295ffdf1fbeae17cf
+ARG SEAMLESS_TILES_REF=c10836d91f4141d9f69cdd6ed53e40fddd71a869
+RUN cd /opt/comfyui-baked-nodes && \
+    git clone https://github.com/JosefKuchar/ComfyUI-AdvancedTiling.git comfyui-advanced-tiling && \
+    git -C comfyui-advanced-tiling checkout "${ADVANCED_TILING_REF}" && \
+    git clone https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles.git ComfyUI-Universal-Seamless-Tiles && \
+    git -C ComfyUI-Universal-Seamless-Tiles checkout "${SEAMLESS_TILES_REF}"
 
 # NOTE: the core MiniMax-Music3 / ACE-Step node modules ship *inside* ComfyUI at this pinned
 # commit (release-locked to the core they run against), so they need no separate build-time import

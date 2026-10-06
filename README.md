@@ -52,6 +52,8 @@ can turn off with an env var; `SEED_BAKED_NODES=0` disables all seeding at once.
 | [ComfyUI_essentials](https://github.com/cubiq/ComfyUI_essentials) | helper (`SEED_HELPER_NODES`) | Common utility nodes many community workflows depend on |
 | [ComfyUI_HuggingFace_Downloader](https://github.com/jnxmx/ComfyUI_HuggingFace_Downloader) | helper (`SEED_HELPER_NODES`) | In-graph HuggingFace model downloads |
 | [comfyui-ollama](https://github.com/stavsap/comfyui-ollama) | llm (`SEED_LLM_NODES`) | In-graph Ollama LLM nodes (`OllamaGenerateV2`, vision, etc.) for prompt-building / captioning. Needs a reachable Ollama server (host or network) |
+| [ComfyUI-AdvancedTiling](https://github.com/JosefKuchar/ComfyUI-AdvancedTiling) | texture (`SEED_TEXTURE_NODES`) | Seamless/tileable generation via circular padding and toroidal attention (GPL-3.0). Seeded as `comfyui-advanced-tiling`, the dir Manager installs it to |
+| [ComfyUI-Universal-Seamless-Tiles](https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles) | texture (`SEED_TEXTURE_NODES`) | Seamless tiling for DiT models (Flux and friends) |
 
 > **Audio models are ComfyUI core (no pack to seed):** on ComfyUI `0.33.1` the **MiniMax-Music3**
 > (`MiniMaxMusic3TextEncode`, `EmptyMiniMaxMusic3LatentAudio`) and **ACE-Step** 1.0/1.5
@@ -144,9 +146,11 @@ recreate.
 | `SEED_VIDEO_NODES` | `1` | Set `0` to skip the video packs (WanVideoWrapper, VideoHelperSuite, Frame-Interpolation) |
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip the helper packs (KJNodes, essentials, HuggingFace Downloader) |
 | `SEED_LLM_NODES` | `1` | Set `0` to skip the LLM pack (comfyui-ollama) |
+| `SEED_TEXTURE_NODES` | `1` | Set `0` to skip the texture tiling packs (AdvancedTiling, Universal-Seamless-Tiles) |
 | `BOOTSTRAP_NODES` | unset | Set `1` to git-clone **extra** packs from `scripts/node-manifest.txt` on first boot. The supported packs are already baked in — this is only for additions |
 | `MANAGER_NETWORK_MODE` | `personal_cloud` | Manager v4 network mode, **enforced** into `user/__manager/config.ini` every boot. `personal_cloud` is **required** to unlock the install/model management API on a box that listens on `0.0.0.0` — Manager blocks those actions for `public`/`private`/`offline` on a non-loopback listen. Set to `public` to lock the box down when exposed publicly |
 | `MANAGER_SECURITY_LEVEL` | `normal` | Manager v4 security level, enforced into `user/__manager/config.ini` every boot. `normal` is the least-permissive level that still allows arbitrary git-URL node installs and arbitrary-URL model downloads via the API; `strong` blocks them |
+| `MANAGER_CHANNEL_URL` | `default` channel URL | Enforced as Manager's `channel_url` every boot (with `default_cache_as_channel_url = True`) so Manager's own boot refresh of `custom-node-list.json` lands in the cache file that installs read. Without it, pip-mode Manager 4.2.x only sees the list bundled in its wheel and git-only packs added upstream later fail with "not found in [default, remote]". Defaults to the `default::` entry of `user/__manager/channels.list` (or Manager's template) |
 | `USE_SAGE_ATTENTION` | `1` in `-sage` images, else unset | On the `-sage` image, appends `--use-sage-attention` (and drops `--use-pytorch-cross-attention`). Set `0` to disable. No effect on the base image |
 
 ## Versioning
@@ -179,7 +183,7 @@ SemVer release; CalVer starts with the next one.)
   `COMFYUI_VERSION` to the latest ComfyUI release; CI builds + smoke-tests base and `-sage`; on green
   it auto-merges (moving `latest`/`latest-sage`) and a dated `vYY.MM.DD` release is cut with the
   pinned images. To pin a specific ComfyUI yourself, build with
-  `--target base --build-arg COMFYUI_REF=v0.37.0 --build-arg COMFYUI_VERSION=0.37.0`.
+  `--target base --build-arg COMFYUI_REF=v0.38.0 --build-arg COMFYUI_VERSION=0.38.0`.
   The `-sage` image is `docker build --target sage .`.
 
 The weekly bump requires a repository Actions secret named **`BUMP_TOKEN`**. The owner must
@@ -189,6 +193,9 @@ and repository permissions **Contents: Read and write** and **Pull requests: Rea
 Paste the token directly into GitHub's repository **Settings → Secrets and variables → Actions**;
 do not put it in an issue, chat, or file. A PAT is needed here so the generated PR triggers CI;
 PRs created with `GITHUB_TOKEN` do not trigger the normal pull-request workflows.
+If the secret is missing, the bump and release workflows now stop at a **Require BUMP_TOKEN** step
+that names the secret and its permissions (previously `create-pull-request` failed with
+"Input 'token' not supplied").
 
 Auto-merge also needs **Settings → General → Pull Requests → Allow auto-merge** and a protection
 rule for `main` under **Settings → Branches** with **Require status checks to pass before merging**:
@@ -202,7 +209,7 @@ approval-gated shared-GPU deployment checklist.
 
 ## Node packs on by default (and how to disable)
 
-The voice, video, and helper node packs listed in
+The voice, video, helper, LLM, and texture node packs listed in
 [What's baked into the image](#whats-baked-into-the-image) are **baked in and on by default** — no
 `BOOTSTRAP_NODES` needed. Turn a category off with an env var when you don't need it:
 
@@ -213,6 +220,7 @@ The voice, video, and helper node packs listed in
 | `SEED_VIDEO_NODES` | `1` | Set `0` to skip WanVideoWrapper, VideoHelperSuite, Frame-Interpolation |
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip KJNodes, essentials, HuggingFace Downloader |
 | `SEED_LLM_NODES` | `1` | Set `0` to skip comfyui-ollama |
+| `SEED_TEXTURE_NODES` | `1` | Set `0` to skip AdvancedTiling and Universal-Seamless-Tiles |
 
 To add packs **beyond** the baked set, install them from ComfyUI-Manager, drop them into the
 `custom_nodes` mount, or list their git URLs in `scripts/node-manifest.txt` and set

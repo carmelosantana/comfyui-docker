@@ -164,7 +164,7 @@ PY
         || echo "WARN: could not re-assert protobuf>=$PROTOBUF_MIN_VERSION (continuing)"
 }
 
-# Map a baked pack directory name to its seeding category (audio|video|helper|llm), or "" if
+# Map a baked pack directory name to its seeding category (audio|video|helper|llm|texture), or "" if
 # uncategorized. Categories let a user disable a whole class of baked packs via SEED_{CAT}_NODES
 # without touching the others. Adding a baked pack (in the Dockerfile) should add it here too.
 baked_node_category() {
@@ -173,11 +173,12 @@ baked_node_category() {
         ComfyUI-WanVideoWrapper|ComfyUI-VideoHelperSuite|ComfyUI-Frame-Interpolation) echo video ;;
         ComfyUI-KJNodes|ComfyUI_essentials|ComfyUI_HuggingFace_Downloader) echo helper ;;
         comfyui-ollama) echo llm ;;
+        comfyui-advanced-tiling|ComfyUI-Universal-Seamless-Tiles) echo texture ;;
         *) echo "" ;;
     esac
 }
 
-# Whether a seeding category is enabled. Each SEED_{AUDIO,VIDEO,HELPER,LLM}_NODES defaults to 1 (on).
+# Whether a seeding category is enabled. Each SEED_{AUDIO,VIDEO,HELPER,LLM,TEXTURE}_NODES defaults to 1.
 # An uncategorized pack ("") is always enabled — it is gated only by the master SEED_BAKED_NODES.
 category_enabled() {
     case "$1" in
@@ -185,8 +186,29 @@ category_enabled() {
         video)  [ "${SEED_VIDEO_NODES:-1}"  = "1" ] ;;
         helper) [ "${SEED_HELPER_NODES:-1}" = "1" ] ;;
         llm)    [ "${SEED_LLM_NODES:-1}"    = "1" ] ;;
+        texture) [ "${SEED_TEXTURE_NODES:-1}" = "1" ] ;;
         *)      return 0 ;;
     esac
+}
+
+# Other directory names a baked pack may already live under: a git clone named after the repo
+# (baked names follow Manager's install dir — the cnr id when the pack has one). Seeding skips the
+# pack when any name is present, enabled or in Manager's .disabled/, so it is never loaded twice.
+baked_pack_aliases() {
+    case "$1" in
+        comfyui-advanced-tiling) echo ComfyUI-AdvancedTiling ;;
+        ComfyUI-Universal-Seamless-Tiles) echo universal-seamless-tiles ;;
+    esac
+}
+
+# Print the first existing install of a baked pack (its own name or an alias, enabled or disabled).
+baked_pack_installed_at() {
+    local n
+    for n in "$1" $(baked_pack_aliases "$1"); do
+        if [ -e "$CUSTOM_NODES_DIR/$n" ]; then echo "$CUSTOM_NODES_DIR/$n"; return 0; fi
+        if [ -e "$CUSTOM_NODES_DIR/.disabled/$n" ]; then echo "$CUSTOM_NODES_DIR/.disabled/$n"; return 0; fi
+    done
+    return 1
 }
 
 # Re-assert runtime-user ownership on a seeded baked pack. custom_nodes is in CHOWN_EXCLUDE (never
@@ -205,7 +227,7 @@ ensure_pack_owner() {
 # Runs BEFORE bootstrap/requirements so their deps are considered on the same boot. Idempotent:
 # an existing dir (a user's own copy or a prior seed) is left untouched, never clobbered — but its
 # ownership IS re-asserted, so packs seeded by an older (pre-chown) image get repaired on redeploy.
-# On by default; SEED_BAKED_NODES=0 disables ALL seeding, and each SEED_{AUDIO,VIDEO,HELPER}_NODES=0
+# On by default; SEED_BAKED_NODES=0 disables ALL seeding, and each SEED_{category}_NODES=0
 # disables just that category. This is a local copy from the image — no git/network involved.
 seed_baked_nodes() {
     if [ "${SEED_BAKED_NODES:-1}" != "1" ]; then
@@ -214,7 +236,7 @@ seed_baked_nodes() {
     fi
     [ -d "$BAKED_NODES_DIR" ] || return 0
     mkdir -p "$CUSTOM_NODES_DIR"
-    local src name dest pack_cat
+    local src name dest pack_cat existing
     for src in "$BAKED_NODES_DIR"/*; do
         [ -d "$src" ] || continue
         name="$(basename "$src")"
@@ -224,11 +246,11 @@ seed_baked_nodes() {
             continue
         fi
         dest="$CUSTOM_NODES_DIR/$name"
-        if [ -e "$dest" ]; then
-            # Present already (user's own copy or a prior seed). Don't clobber the tree, but DO
-            # repair ownership: a pack seeded by an older image predates the chown below and is
-            # still root-owned, which is exactly the .git/.cnr-id "unable to create file" case.
-            ensure_pack_owner "$dest"
+        if existing="$(baked_pack_installed_at "$name")"; then
+            # Present already (user's own copy, a Manager install, or a prior seed). Don't clobber
+            # the tree, but DO repair ownership: a pack seeded by an older image predates the chown
+            # below and is still root-owned, which is exactly the .git/.cnr-id "unable to create file" case.
+            ensure_pack_owner "$existing"
             continue
         fi
         echo "Seeding baked node pack $name into custom_nodes..."
@@ -320,6 +342,41 @@ seed_manager_config() {
     _set_ini_key "$dest" security_level "$level"
     _set_ini_key "$dest" network_mode "$netmode"
     echo "Manager config enforced at $dest (security_level=$level, network_mode=$netmode)."
+    align_manager_channel "$dest"
+}
+
+# Print the URL of Manager's 'default' channel: MANAGER_CHANNEL_URL, else the user's channels.list
+# (what Manager reads), else the template shipped with the pinned Manager. Empty if none is found.
+manager_default_channel_url() {
+    if [ -n "${MANAGER_CHANNEL_URL:-}" ]; then
+        echo "$MANAGER_CHANNEL_URL"
+        return 0
+    fi
+    local f
+    for f in "$COMFYUI_DIR/user/__manager/channels.list" "$MANAGER_SRC/comfyui_manager/channels.list.template"; do
+        if [ -f "$f" ]; then
+            sed -n 's/^default:://p' "$f" | head -n 1 | tr -d '\r'
+            return 0
+        fi
+    done
+}
+
+# Keep Manager's node lists fresh. In pip-package mode Manager 4.2.x never fetches a list on lookup:
+# it reads user/__manager/cache/<hash(channel/file)>_<file>, else the list bundled in the wheel. Its
+# boot thread refreshes that cache (skipped when network_mode=offline, errors logged, not fatal) but
+# keys it on config channel_url — by default the legacy ltdrdata URL — while installs look up the
+# 'default' channel (the Comfy-Org URL). The hashes never match, so installs see the stale bundled
+# list. Pointing channel_url at the 'default' channel and keying the refresh on it closes the gap.
+align_manager_channel() {
+    local cfg="$1" url
+    url="$(manager_default_channel_url)"
+    if [ -z "$url" ]; then
+        echo "WARN: no Manager 'default' channel found; leaving channel_url unchanged."
+        return 0
+    fi
+    _set_ini_key "$cfg" channel_url "$url"
+    _set_ini_key "$cfg" default_cache_as_channel_url True
+    echo "Manager channel_url aligned to the 'default' channel ($url)."
 }
 
 # Transform the ComfyUI arg list for the sage-attention toggle. When USE_SAGE_ATTENTION=1,

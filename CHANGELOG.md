@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Bump ComfyUI `v0.37.0` → `v0.38.0`. Manager stays `4.2.2`, which v0.38.0 still pins in
+  `manager_requirements.txt`; Manager 4.3 has no fix for the stale node list, so there is no reason to
+  get ahead of upstream. Release review: ComfyUI dropped `torchaudio` from its requirements, but the
+  pytorch base image ships `torchaudio 2.9.1+cu128` and the build guard still imports it (TTS needs it).
+  `--use-sage-attention` and `attention_sage` are unchanged; the new per-block `comfy_attention`
+  metadata only applies to model files that carry it. New pins (`comfyui-frontend-package==1.53.6`,
+  `comfyui-workflow-templates==0.11.70`, `comfy-kitchen==0.2.36`) are vetted: 6–18 days old, not
+  yanked, pinned by upstream.
+- CI: the bump and release workflows fail fast with a clear error naming the missing `BUMP_TOKEN`
+  secret and its permissions. The weekly bump has failed since 2026-09-14 because the secret was
+  never added (`create-pull-request`: "Input 'token' not supplied").
+- Bake two texture tiling packs under a new **`texture`** seeding category (`SEED_TEXTURE_NODES`,
+  default `1`): [ComfyUI-AdvancedTiling](https://github.com/JosefKuchar/ComfyUI-AdvancedTiling) @
+  `3c35bc9` and [ComfyUI-Universal-Seamless-Tiles](https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles)
+  @ `c10836d`. No Python deps. They are staged under the dir names Manager installs to
+  (`comfyui-advanced-tiling`, `ComfyUI-Universal-Seamless-Tiles`), and seeding also skips a pack found
+  under a known alias or in `custom_nodes/.disabled/`, so an existing install is never clobbered or doubled.
+- Fix ComfyUI-Manager not seeing node packs added upstream after its release (e.g.
+  `OliverCrosby/ComfyUI-Universal-Seamless-Tiles` → "not found in [default, remote]"). In pip mode
+  Manager 4.2.x never fetches lists on lookup; it reads a cache keyed by `hash(channel_url/file)` or
+  falls back to the list bundled in the wheel. Its boot refresh keyed that cache on the legacy
+  `ltdrdata` `channel_url`, while installs look up the Comfy-Org `default` channel, so the hashes
+  never matched. The entrypoint now enforces `channel_url` = the `default` channel URL and
+  `default_cache_as_channel_url = True` every boot (override: `MANAGER_CHANNEL_URL`). Manager 4.3
+  has the same code path, so a Manager bump would not fix this.
 - Switch image versioning to **CalVer `YY.MM.DD`** (replacing SemVer); keep `latest`/`latest-sage`
   and the `comfyui-<ver>` axis. `v0.8.0` is the last SemVer tag.
 - Automate the weekly ComfyUI bump end to end: PAT-authed PR (`BUMP_TOKEN`) → CI → auto-merge → a

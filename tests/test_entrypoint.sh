@@ -350,4 +350,73 @@ printf '#!/usr/bin/env bash\nexit 1\n' > "$pbin/pip"; chmod +x "$pbin/pip"; mk_p
 PATH="$pbin:$PATH" ensure_protobuf_runtime && rc=0 || rc=$?
 assert_eq "0" "$rc" "ensure_protobuf_runtime survives a failing pip (continues boot)"
 
+# --- Manager node-list freshness: channel_url must equal the 'default' channel URL ---
+# Manager 4.2.x in pip mode never fetches lists on lookup; it reads user/__manager/cache/<hash(uri)>_<file>
+# or falls back to the list bundled in the wheel. Its boot thread (default_cache_update) DOES refresh
+# that cache, but keyed on config channel_url (default: the legacy ltdrdata URL) while installs look up
+# the 'default' channel (Comfy-Org URL from channels.list). Different URI -> different hash -> stale
+# bundled list. Enforcing channel_url = the 'default' channel URL (and default_cache_as_channel_url)
+# makes the boot refresh land exactly where install lookups read.
+MANAGER_SRC="$workdir/mgr_src"; mkdir -p "$MANAGER_SRC/comfyui_manager"
+printf 'default::https://example.test/template/main\nrecent::https://example.test/template/main/node_db/new\n' \
+    > "$MANAGER_SRC/comfyui_manager/channels.list.template"
+
+# (1) No user channels.list -> template's default channel; legacy ltdrdata channel_url corrected.
+COMFYUI_DIR="$workdir/opt_mgr_chan"; mkdir -p "$COMFYUI_DIR/user/__manager"
+printf '[default]\nchannel_url = https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main\n' > "$COMFYUI_DIR/user/__manager/config.ini"
+( unset MANAGER_CHANNEL_URL; seed_manager_config )
+cfg="$COMFYUI_DIR/user/__manager/config.ini"
+assert_eq "https://example.test/template/main" "$(sed -n 's/^channel_url = //p' "$cfg")" "channel_url aligned to template 'default' channel"
+assert_eq "True" "$(sed -n 's/^default_cache_as_channel_url = //p' "$cfg")" "boot cache refresh keyed on channel_url"
+
+# (2) A user channels.list (what Manager actually reads) wins over the template.
+printf 'default::https://example.test/user/main\n' > "$COMFYUI_DIR/user/__manager/channels.list"
+( unset MANAGER_CHANNEL_URL; seed_manager_config )
+assert_eq "https://example.test/user/main" "$(sed -n 's/^channel_url = //p' "$cfg")" "user channels.list 'default' wins over template"
+
+# (3) MANAGER_CHANNEL_URL env overrides both.
+MANAGER_CHANNEL_URL="https://example.test/env/main" seed_manager_config
+assert_eq "https://example.test/env/main" "$(sed -n 's/^channel_url = //p' "$cfg")" "MANAGER_CHANNEL_URL overrides"
+
+# (4) No channels source at all -> channel keys left untouched, boot does not fail.
+COMFYUI_DIR="$workdir/opt_mgr_nochan"; mkdir -p "$COMFYUI_DIR"
+( unset MANAGER_CHANNEL_URL; MANAGER_SRC="$workdir/none"; seed_manager_config ) && rc=0 || rc=$?
+assert_eq "0" "$rc" "seed_manager_config survives a missing channels source"
+assert_true '! grep -q "^channel_url" "$COMFYUI_DIR/user/__manager/config.ini"' "channel_url not invented when no source"
+
+# --- Texture category: the two seamless-tiling packs, gated by SEED_TEXTURE_NODES ---
+# Baked under the dir names Manager itself installs to (cnr id for AdvancedTiling, repo name for the
+# git-only Universal-Seamless-Tiles), so a Manager-installed copy is recognised, never doubled.
+assert_eq "texture" "$(baked_node_category comfyui-advanced-tiling)"          "comfyui-advanced-tiling -> texture"
+assert_eq "texture" "$(baked_node_category ComfyUI-Universal-Seamless-Tiles)" "Universal-Seamless-Tiles -> texture"
+
+BAKED_NODES_DIR="$workdir/baked_tex"
+for p in comfyui-advanced-tiling ComfyUI-Universal-Seamless-Tiles ComfyUI-KJNodes; do
+    mkdir -p "$BAKED_NODES_DIR/$p"; echo baked > "$BAKED_NODES_DIR/$p/marker"
+done
+
+CUSTOM_NODES_DIR="$workdir/cn_tex_all"; mkdir -p "$CUSTOM_NODES_DIR"
+( unset SEED_BAKED_NODES SEED_TEXTURE_NODES; seed_baked_nodes )
+assert_true '[ -d "$CUSTOM_NODES_DIR/comfyui-advanced-tiling" ]'          "default seeds AdvancedTiling"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-Universal-Seamless-Tiles" ]' "default seeds Universal-Seamless-Tiles"
+
+CUSTOM_NODES_DIR="$workdir/cn_tex_off"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_TEXTURE_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/comfyui-advanced-tiling" ]'          "SEED_TEXTURE_NODES=0 skips AdvancedTiling"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Universal-Seamless-Tiles" ]' "SEED_TEXTURE_NODES=0 skips Universal-Seamless-Tiles"
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-KJNodes" ]'                    "SEED_TEXTURE_NODES=0 still seeds helper"
+
+# The live box already has AdvancedTiling (Manager nightly install at the same commit): left as is.
+CUSTOM_NODES_DIR="$workdir/cn_tex_live"; mkdir -p "$CUSTOM_NODES_DIR/comfyui-advanced-tiling"
+echo live > "$CUSTOM_NODES_DIR/comfyui-advanced-tiling/marker"
+seed_baked_nodes
+assert_eq "live" "$(cat "$CUSTOM_NODES_DIR/comfyui-advanced-tiling/marker")" "existing Manager-installed AdvancedTiling not clobbered"
+
+# A copy under another known name (git clone by repo name, or Manager-disabled) is not doubled.
+CUSTOM_NODES_DIR="$workdir/cn_tex_alias"; mkdir -p "$CUSTOM_NODES_DIR/ComfyUI-AdvancedTiling" \
+    "$CUSTOM_NODES_DIR/.disabled/ComfyUI-Universal-Seamless-Tiles"
+seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/comfyui-advanced-tiling" ]'          "AdvancedTiling git clone under repo name -> no second copy"
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Universal-Seamless-Tiles" ]' "Manager-disabled pack is not re-seeded"
+
 finish
