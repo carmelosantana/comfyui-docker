@@ -395,6 +395,22 @@ apply_sage_attention() {
     printf '%s\n' "--use-sage-attention"
 }
 
+# TTS-Audio-Suite's MOSS-SoundEffect v2 uses sageattn whenever the module imports, inside
+# model_fn_wan_video's @torch.compile(fullgraph=True). sageattn calls torch.cuda.device_count(),
+# a graph break, so every MOSS render fails on the -sage image. Force its SDPA branch in the live
+# copy (seeding never overwrites it, and Manager updates restore it, so this runs every boot).
+# Rewritten in place to keep the runtime user's ownership; a no-op if upstream changes the line.
+patch_moss_sfx_sage() {
+    local rel="engines/moss_soundeffect_v2/impl/moss_soundeffect_v2/diffsynth/models/wan_video_dit.py"
+    local f patched
+    for f in "$CUSTOM_NODES_DIR/TTS-Audio-Suite/$rel" "$CUSTOM_NODES_DIR/.disabled/TTS-Audio-Suite/$rel"; do
+        [ -f "$f" ] && grep -q '^    SAGE_ATTN_AVAILABLE = True$' "$f" || continue
+        patched="$(sed 's/^    SAGE_ATTN_AVAILABLE = True$/    SAGE_ATTN_AVAILABLE = False  # comfyui-docker: sageattn breaks fullgraph torch.compile/' "$f")"
+        printf '%s\n' "$patched" > "$f"
+        echo "Patched MOSS-SoundEffect v2 to use SDPA instead of SageAttention: $f"
+    done
+}
+
 main() {
     echo "Creating model directories..."
     create_model_dirs
@@ -414,6 +430,7 @@ main() {
     maybe_bootstrap_nodes
     echo "Installing custom-node requirements (once)..."
     install_node_requirements
+    patch_moss_sfx_sage
     # A user pack in the loop above may have downgraded protobuf below what the baked stack's
     # generated code (onnx/tensorboard/FantasyPortrait, gencode 6.31.1) needs. Correct it now.
     ensure_protobuf_runtime

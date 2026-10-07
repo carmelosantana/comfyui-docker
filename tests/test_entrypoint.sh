@@ -419,4 +419,33 @@ seed_baked_nodes
 assert_true '[ ! -e "$CUSTOM_NODES_DIR/comfyui-advanced-tiling" ]'          "AdvancedTiling git clone under repo name -> no second copy"
 assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Universal-Seamless-Tiles" ]' "Manager-disabled pack is not re-seeded"
 
+# --- MOSS-SoundEffect v2: keep sageattention out of its fullgraph torch.compile ---
+# TTS-Audio-Suite's MOSS SFX v2 picks sageattn whenever the module imports, inside
+# model_fn_wan_video's @torch.compile(fullgraph=True). sageattn calls torch.cuda.device_count(),
+# a graph break, so every render fails on the -sage image (with or without USE_SAGE_ATTENTION).
+# The boot patch forces its SDPA branch on the live custom_nodes copy; other sage users are unaffected.
+moss_rel="engines/moss_soundeffect_v2/impl/moss_soundeffect_v2/diffsynth/models/wan_video_dit.py"
+moss_src='try:
+    from sageattention import sageattn
+    SAGE_ATTN_AVAILABLE = True
+except ModuleNotFoundError:
+    SAGE_ATTN_AVAILABLE = False'
+CUSTOM_NODES_DIR="$workdir/cn_moss"; moss_file="$CUSTOM_NODES_DIR/TTS-Audio-Suite/$moss_rel"
+mkdir -p "$(dirname "$moss_file")"; printf '%s\n' "$moss_src" > "$moss_file"
+moss_inode="$(stat -c %i "$moss_file")"
+patch_moss_sfx_sage
+assert_true '! grep -q "^    SAGE_ATTN_AVAILABLE = True" "$moss_file"' "MOSS SFX sage import no longer enables sageattn"
+assert_eq 2 "$(grep -c "^    SAGE_ATTN_AVAILABLE = False" "$moss_file")" "both MOSS SFX branches fall through to SDPA"
+assert_eq "$moss_inode" "$(stat -c %i "$moss_file")" "patched in place (inode, so owner, preserved)"
+patch_moss_sfx_sage
+assert_eq 1 "$(grep -c "comfyui-docker" "$moss_file")" "patch is idempotent across boots"
+
+# A Manager-disabled copy is patched too; a missing pack or upstream-changed file is a no-op.
+CUSTOM_NODES_DIR="$workdir/cn_moss_dis"; moss_file="$CUSTOM_NODES_DIR/.disabled/TTS-Audio-Suite/$moss_rel"
+mkdir -p "$(dirname "$moss_file")"; printf '%s\n' "$moss_src" > "$moss_file"
+patch_moss_sfx_sage
+assert_true '! grep -q "^    SAGE_ATTN_AVAILABLE = True" "$moss_file"' "disabled TTS-Audio-Suite copy patched"
+CUSTOM_NODES_DIR="$workdir/cn_moss_none"; mkdir -p "$CUSTOM_NODES_DIR"
+assert_true 'patch_moss_sfx_sage' "no TTS-Audio-Suite -> no error"
+
 finish
