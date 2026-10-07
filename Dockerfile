@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG PYTORCH_VERSION=2.9.1
-ARG CUDA_VERSION=12.8
+ARG CUDA_VERSION=13.0
 ARG CUDNN_VERSION=9
 
 # ---------------------------------------------------------------------------

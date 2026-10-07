@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Move the base image from CUDA 12.8 to **CUDA 13.0** (`pytorch/pytorch:2.9.1-cuda13.0-cudnn9`, same
+  PyTorch 2.9.1, so every pin and the SageAttention build stay as they were). ComfyUI only enables
+  comfy-kitchen's CUDA backend on cu130 or newer (`comfy/quant_ops.py`), and on cu128 it logged
+  "You need pytorch with cu130 or higher to use optimized CUDA operations". **Hosts need NVIDIA
+  driver ≥ 580.** Older hosts should pin `26.10.06` / `26.10.06-sage`.
 - Fix MOSS-SoundEffect v2 failing every render on the `-sage` image. TTS-Audio-Suite (`871c97f`, same
   on upstream HEAD) uses `sageattn` whenever `sageattention` imports, inside a
   `@torch.compile(fullgraph=True)` function; `sageattn` calls `torch.cuda.device_count()`, a graph

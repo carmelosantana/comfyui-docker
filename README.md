@@ -5,6 +5,10 @@
 > `--enable-manager`), clears any stale v3 Manager on persistent `custom_nodes` mounts, adds
 > RTX 3090 runtime defaults, and publishes to `ghcr.io/carmelosantana/comfyui-docker`.
 
+> **Host requirement:** the image is PyTorch 2.9.1 on **CUDA 13.0**, which needs NVIDIA driver
+> **580 or newer** on the host (`nvidia-smi` shows the version). On an older driver CUDA reports no
+> device; stay on a `26.10.06` tag (CUDA 12.8) until the driver is updated.
+
 ## Why this fork?
 
 Upstream ([lecode-official/comfyui-docker](https://github.com/lecode-official/comfyui-docker))
