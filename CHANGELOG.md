@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Move the base image from CUDA 12.8 to **CUDA 13.0** (`pytorch/pytorch:2.9.1-cuda13.0-cudnn9`, same
+  PyTorch 2.9.1, so every pin and the SageAttention build stay as they were). ComfyUI only enables
+  comfy-kitchen's CUDA backend on cu130 or newer (`comfy/quant_ops.py`), and on cu128 it logged
+  "You need pytorch with cu130 or higher to use optimized CUDA operations". **Hosts need NVIDIA
+  driver ≥ 580.** Older hosts should pin `26.10.06` / `26.10.06-sage`.
+- Fix MOSS-SoundEffect v2 failing every render on the `-sage` image. TTS-Audio-Suite (`871c97f`, same
+  on upstream HEAD) uses `sageattn` whenever `sageattention` imports, inside a
+  `@torch.compile(fullgraph=True)` function; `sageattn` calls `torch.cuda.device_count()`, a graph
+  break, so compile aborts with "torch.* op returned non-Tensor". This happens whether or not
+  `USE_SAGE_ATTENTION` is on. The entrypoint now patches the live pack on every boot so MOSS uses its
+  SDPA branch (`SAGE_ATTN_AVAILABLE = False`, tagged `comfyui-docker`). Global sage and every other
+  sage user are unchanged. The edit is a local change in the pack's git tree: if a Manager update of
+  TTS-Audio-Suite refuses because of it, `git checkout -- engines/moss_soundeffect_v2` in the pack and
+  the next boot re-applies it.
+
+## v26.10.06 (October 6, 2026)
+
 - Bump ComfyUI `v0.37.0` → `v0.38.0`. Manager stays `4.2.2`, which v0.38.0 still pins in
   `manager_requirements.txt`; Manager 4.3 has no fix for the stale node list, so there is no reason to
   get ahead of upstream. Release review: ComfyUI dropped `torchaudio` from its requirements, but the
