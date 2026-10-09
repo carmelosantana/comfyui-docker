@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix MOSS-SoundEffect v2 still failing after the SDPA patch with "cudaMallocAsync does not yet
+  support checkPoolLiveAllocations". `model_fn_wan_video` compiles with
+  `options={"triton.cudagraphs": True}`, and Inductor's CUDA-graph trees need PyTorch's native caching
+  allocator, while ComfyUI runs `cudaMallocAsync`. The boot patch now also rewrites that decorator to
+  `"triton.cudagraphs": False` (still `fullgraph=True`), logged as "Patched MOSS-SoundEffect v2 to
+  disable Inductor cudagraphs". Only MOSS changes: the global allocator stays as is, since
+  `--disable-cuda-malloc` would affect every other workflow.
+
 - Move the base image from CUDA 12.8 to **CUDA 13.0** (`pytorch/pytorch:2.9.1-cuda13.0-cudnn9`, same
   PyTorch 2.9.1, so every pin and the SageAttention build stay as they were). ComfyUI only enables
   comfy-kitchen's CUDA backend on cu130 or newer (`comfy/quant_ops.py`), and on cu128 it logged
