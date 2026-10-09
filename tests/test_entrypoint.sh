@@ -448,4 +448,26 @@ assert_true '! grep -q "^    SAGE_ATTN_AVAILABLE = True" "$moss_file"' "disabled
 CUSTOM_NODES_DIR="$workdir/cn_moss_none"; mkdir -p "$CUSTOM_NODES_DIR"
 assert_true 'patch_moss_sfx_sage' "no TTS-Audio-Suite -> no error"
 
+# --- MOSS-SoundEffect v2: no Inductor CUDA graphs under cudaMallocAsync ---
+# model_fn_wan_video compiles with triton.cudagraphs=True; cudagraph trees call
+# checkPoolLiveAllocations, which cudaMallocAsync (ComfyUI's allocator) doesn't implement.
+moss_wan_rel="engines/moss_soundeffect_v2/impl/moss_soundeffect_v2/diffsynth/pipelines/wan_audio.py"
+moss_wan_src='@torch.compile(options={"triton.cudagraphs": True}, fullgraph=True)
+def model_fn_wan_video('
+CUSTOM_NODES_DIR="$workdir/cn_moss_cg"; moss_wan="$CUSTOM_NODES_DIR/TTS-Audio-Suite/$moss_wan_rel"
+mkdir -p "$(dirname "$moss_wan")"; printf '%s\n' "$moss_wan_src" > "$moss_wan"
+moss_inode="$(stat -c %i "$moss_wan")"
+out="$(patch_moss_sfx_sage)"
+assert_true '! grep -q "triton.cudagraphs\": True" "$moss_wan"' "MOSS SFX compile no longer enables cudagraphs"
+assert_eq 1 "$(grep -c '^@torch.compile(options={"triton.cudagraphs": False}, fullgraph=True)' "$moss_wan")" "fullgraph kept, cudagraphs off"
+assert_eq "$moss_inode" "$(stat -c %i "$moss_wan")" "cudagraphs patched in place (inode, so owner, preserved)"
+assert_true 'grep -q "Patched MOSS-SoundEffect v2 to disable Inductor cudagraphs" <<<"$out"' "cudagraphs patch is logged"
+out="$(patch_moss_sfx_sage)"
+assert_eq 1 "$(grep -c "comfyui-docker" "$moss_wan")" "cudagraphs patch is idempotent across boots"
+assert_true '! grep -q "cudagraphs" <<<"$out"' "already-patched file is not re-logged"
+CUSTOM_NODES_DIR="$workdir/cn_moss_cg_dis"; moss_wan="$CUSTOM_NODES_DIR/.disabled/TTS-Audio-Suite/$moss_wan_rel"
+mkdir -p "$(dirname "$moss_wan")"; printf '%s\n' "$moss_wan_src" > "$moss_wan"
+patch_moss_sfx_sage >/dev/null
+assert_true '! grep -q "triton.cudagraphs\": True" "$moss_wan"' "disabled TTS-Audio-Suite copy: cudagraphs off"
+
 finish

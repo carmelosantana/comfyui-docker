@@ -399,15 +399,26 @@ apply_sage_attention() {
 # model_fn_wan_video's @torch.compile(fullgraph=True). sageattn calls torch.cuda.device_count(),
 # a graph break, so every MOSS render fails on the -sage image. Force its SDPA branch in the live
 # copy (seeding never overwrites it, and Manager updates restore it, so this runs every boot).
+# The same function also compiles with triton.cudagraphs=True; Inductor's cudagraph trees call
+# checkPoolLiveAllocations, which ComfyUI's cudaMallocAsync allocator doesn't implement, so turn
+# cudagraphs off for MOSS only (fullgraph stays; --disable-cuda-malloc would hit every workflow).
 # Rewritten in place to keep the runtime user's ownership; a no-op if upstream changes the line.
 patch_moss_sfx_sage() {
-    local rel="engines/moss_soundeffect_v2/impl/moss_soundeffect_v2/diffsynth/models/wan_video_dit.py"
-    local f patched
-    for f in "$CUSTOM_NODES_DIR/TTS-Audio-Suite/$rel" "$CUSTOM_NODES_DIR/.disabled/TTS-Audio-Suite/$rel"; do
-        [ -f "$f" ] && grep -q '^    SAGE_ATTN_AVAILABLE = True$' "$f" || continue
-        patched="$(sed 's/^    SAGE_ATTN_AVAILABLE = True$/    SAGE_ATTN_AVAILABLE = False  # comfyui-docker: sageattn breaks fullgraph torch.compile/' "$f")"
-        printf '%s\n' "$patched" > "$f"
-        echo "Patched MOSS-SoundEffect v2 to use SDPA instead of SageAttention: $f"
+    local moss="engines/moss_soundeffect_v2/impl/moss_soundeffect_v2/diffsynth"
+    local root f patched
+    for root in "$CUSTOM_NODES_DIR/TTS-Audio-Suite" "$CUSTOM_NODES_DIR/.disabled/TTS-Audio-Suite"; do
+        f="$root/$moss/models/wan_video_dit.py"
+        if [ -f "$f" ] && grep -q '^    SAGE_ATTN_AVAILABLE = True$' "$f"; then
+            patched="$(sed 's/^    SAGE_ATTN_AVAILABLE = True$/    SAGE_ATTN_AVAILABLE = False  # comfyui-docker: sageattn breaks fullgraph torch.compile/' "$f")"
+            printf '%s\n' "$patched" > "$f"
+            echo "Patched MOSS-SoundEffect v2 to use SDPA instead of SageAttention: $f"
+        fi
+        f="$root/$moss/pipelines/wan_audio.py"
+        if [ -f "$f" ] && grep -q '^@torch.compile(options={"triton.cudagraphs": True}, fullgraph=True)$' "$f"; then
+            patched="$(sed 's/^@torch.compile(options={"triton.cudagraphs": True}, fullgraph=True)$/@torch.compile(options={"triton.cudagraphs": False}, fullgraph=True)  # comfyui-docker: cudagraphs need the native allocator, not cudaMallocAsync/' "$f")"
+            printf '%s\n' "$patched" > "$f"
+            echo "Patched MOSS-SoundEffect v2 to disable Inductor cudagraphs: $f"
+        fi
     done
 }
 
