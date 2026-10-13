@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Fix Qwen3-TTS (Shared Runtime) and the GraniteASR word-timestamp aligner dying with "Worker closed
+  the response stream unexpectedly" (Qwen3-TTS then returns silence as a success). TTS-Audio-Suite
+  `871c97f` isolated workers add the suite root to `sys.path` only if it is missing, and the launcher
+  copies the parent's `sys.path` order, so an inherited entry with its own `utils` (ComfyUI's
+  `utils/`, Step EditX's `utils.py`) can shadow the suite's `utils` package and the worker fails at
+  import. This is upstream [#366](https://github.com/diodiogod/TTS-Audio-Suite/issues/366), fixed in
+  5.9.3 (`10c1f520`). The entrypoint now patches the live pack on every boot so
+  `utils/runtimes/workers/*_worker.py` always insert the suite root first (tagged `comfyui-docker`,
+  logged as "Patched TTS worker import precedence"). It is a no-op once upstream's fix is installed.
+  If a Manager update of TTS-Audio-Suite refuses because of the edit,
+  `git checkout -- utils/runtimes/workers` in the pack and the next boot re-applies it.
+- Known issue, not fixed here: Qwen3-TTS in **Main Environment** mode still fails with
+  `Failed to load Qwen3-TTS model: 'default'`. Its bundled model code reads
+  `ROPE_INIT_FUNCTIONS["default"]`, which Transformers 5 removed, and the main env needs
+  Transformers ≥ 5.3 for Higgs v3, Step EditX and MOSS-TTS. Clients should use Shared Runtime
+  (the node's default).
+
 - Fix MOSS-SoundEffect v2 still failing after the SDPA patch with "cudaMallocAsync does not yet
   support checkPoolLiveAllocations". `model_fn_wan_video` compiles with
   `options={"triton.cudagraphs": True}`, and Inductor's CUDA-graph trees need PyTorch's native caching
