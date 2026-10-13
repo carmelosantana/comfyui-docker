@@ -470,4 +470,36 @@ mkdir -p "$(dirname "$moss_wan")"; printf '%s\n' "$moss_wan_src" > "$moss_wan"
 patch_moss_sfx_sage >/dev/null
 assert_true '! grep -q "triton.cudagraphs\": True" "$moss_wan"' "disabled TTS-Audio-Suite copy: cudagraphs off"
 
+# --- TTS-Audio-Suite #366: isolated workers put the suite root first on sys.path ---
+# Workers only insert the suite root when it is missing, so an inherited entry with its own
+# `utils` shadows the suite's utils package and the worker dies at import. Force the insert.
+tts_worker_src='if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))'
+CUSTOM_NODES_DIR="$workdir/cn_tts"; tts_workers="$CUSTOM_NODES_DIR/TTS-Audio-Suite/utils/runtimes/workers"
+mkdir -p "$tts_workers"; printf '%s\n' "$tts_worker_src" > "$tts_workers/qwen3_tts_worker.py"
+printf '%s\n' "$tts_worker_src" > "$tts_workers/qwen3_asr_worker.py"
+tts_inode="$(stat -c %i "$tts_workers/qwen3_tts_worker.py")"
+out="$(patch_tts_worker_import_precedence)"
+assert_eq 1 "$(grep -c '^if True:  # comfyui-docker: suite utils first (TTS-Audio-Suite #366)$' "$tts_workers/qwen3_tts_worker.py")" "TTS worker forces the suite root first"
+assert_true '! grep -q "not in sys.path" "$tts_workers/qwen3_tts_worker.py"' "TTS worker guard removed"
+assert_true 'grep -q "^    sys.path.insert(0, str(PROJECT_ROOT))$" "$tts_workers/qwen3_tts_worker.py"' "TTS worker insert line kept"
+assert_true '! grep -q "not in sys.path" "$tts_workers/qwen3_asr_worker.py"' "every *_worker.py is patched"
+assert_eq "$tts_inode" "$(stat -c %i "$tts_workers/qwen3_tts_worker.py")" "TTS worker patched in place (inode, so owner, preserved)"
+assert_true 'grep -q "Patched TTS worker import precedence: .*qwen3_tts_worker.py" <<<"$out"' "TTS worker patch is logged"
+tts_before="$(cat "$tts_workers/qwen3_tts_worker.py")"
+out="$(patch_tts_worker_import_precedence)"
+assert_eq "$tts_before" "$(cat "$tts_workers/qwen3_tts_worker.py")" "TTS worker patch is idempotent across boots"
+assert_true '! grep -q "Patched TTS worker" <<<"$out"' "already-patched worker is not re-logged"
+# Upstream's fix (v5.9.3, 10c1f520) drops the guard: such a worker is left untouched.
+tts_fixed_src='sys.path.insert(0, str(PROJECT_ROOT))'
+printf '%s\n' "$tts_fixed_src" > "$tts_workers/fish_audio_s2_worker.py"
+patch_tts_worker_import_precedence >/dev/null
+assert_eq "$tts_fixed_src" "$(cat "$tts_workers/fish_audio_s2_worker.py")" "worker without the guard is untouched"
+CUSTOM_NODES_DIR="$workdir/cn_tts_dis"; tts_workers="$CUSTOM_NODES_DIR/.disabled/TTS-Audio-Suite/utils/runtimes/workers"
+mkdir -p "$tts_workers"; printf '%s\n' "$tts_worker_src" > "$tts_workers/qwen3_tts_worker.py"
+patch_tts_worker_import_precedence >/dev/null
+assert_true '! grep -q "not in sys.path" "$tts_workers/qwen3_tts_worker.py"' "disabled TTS-Audio-Suite copy: worker patched"
+CUSTOM_NODES_DIR="$workdir/cn_tts_none"; mkdir -p "$CUSTOM_NODES_DIR"
+assert_true 'patch_tts_worker_import_precedence' "no TTS-Audio-Suite -> no error"
+
 finish

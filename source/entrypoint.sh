@@ -422,6 +422,26 @@ patch_moss_sfx_sage() {
     done
 }
 
+# TTS-Audio-Suite #366 (fixed upstream in 5.9.3, 10c1f520): isolated workers add the suite root to
+# sys.path only if it is missing. The launcher copies the parent's sys.path order into the worker,
+# so an inherited entry with its own `utils` (ComfyUI's utils/, Step EditX's utils.py, ...) can sit
+# ahead of the suite root, shadow the suite's utils package, and the worker dies at import
+# ("Worker closed the response stream unexpectedly"). Make the insert unconditional so the suite
+# root is always first. Rewritten in place to keep the runtime user's ownership; a no-op once
+# upstream's fix (no guard line) is installed. Runs every boot for the same reason as the MOSS patch.
+patch_tts_worker_import_precedence() {
+    local root f patched
+    for root in "$CUSTOM_NODES_DIR/TTS-Audio-Suite" "$CUSTOM_NODES_DIR/.disabled/TTS-Audio-Suite"; do
+        for f in "$root"/utils/runtimes/workers/*_worker.py; do
+            if [ -f "$f" ] && grep -q '^if str(PROJECT_ROOT) not in sys.path:$' "$f"; then
+                patched="$(sed 's/^if str(PROJECT_ROOT) not in sys.path:$/if True:  # comfyui-docker: suite utils first (TTS-Audio-Suite #366)/' "$f")"
+                printf '%s\n' "$patched" > "$f"
+                echo "Patched TTS worker import precedence: $f"
+            fi
+        done
+    done
+}
+
 main() {
     echo "Creating model directories..."
     create_model_dirs
@@ -442,6 +462,7 @@ main() {
     echo "Installing custom-node requirements (once)..."
     install_node_requirements
     patch_moss_sfx_sage
+    patch_tts_worker_import_precedence
     # A user pack in the loop above may have downgraded protobuf below what the baked stack's
     # generated code (onnx/tensorboard/FantasyPortrait, gencode 6.31.1) needs. Correct it now.
     ensure_protobuf_runtime
