@@ -247,3 +247,81 @@ RUN python -c "import torch, sageattention; print('sage ok on torch', torch.__ve
 
 # Swap-and-go: the -sage tag runs with sage attention on. Set to 0 to A/B without a rebuild.
 ENV USE_SAGE_ATTENTION=1
+
+# ---------------------------------------------------------------------------
+# d3d-build — compile Direct3D-S2's CUDA pieces in the devel twin, against the image's own torch
+# (no flash-attn wheel exists for torch 2.9). No GPU needed: everything cross-compiles for the
+# 3090. flash-attn's sm_80 kernels run on sm_86, so only sm_80 is built.
+# ---------------------------------------------------------------------------
+FROM pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-devel AS d3d-build
+
+# Pins resolved 2026-10-17. flash-attn 2.8.3.post2 is skipped: published 2026-10-14 (too new).
+ARG FLASH_ATTN_VERSION=2.8.3.post1
+ARG DIRECT3D_S2_REF=a1cf235b2881cff04a91900060a9546b40e7ee5d
+ARG NVDIFFRAST_REF=253ac4fcea7de5f396371124af597e6cc957bfae
+ARG D3D_CUDA_ARCH=8.6
+# flash-attn needs several GB of RAM per compile job; raise on a bigger build host.
+ARG D3D_MAX_JOBS=2
+
+RUN apt-get update --assume-yes && \
+    apt-get install --assume-yes --no-install-recommends git build-essential ninja-build && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir ninja packaging psutil einops wheel
+
+ENV TORCH_CUDA_ARCH_LIST=${D3D_CUDA_ARCH} \
+    FLASH_ATTN_CUDA_ARCHS=80 \
+    FLASH_ATTENTION_FORCE_BUILD=TRUE \
+    MAX_JOBS=${D3D_MAX_JOBS} \
+    NVCC_THREADS=2
+
+RUN pip wheel --no-cache-dir --no-build-isolation --no-deps "flash-attn==${FLASH_ATTN_VERSION}" -w /wheels
+
+RUN git clone https://github.com/DreamTechAI/Direct3D-S2.git /src/Direct3D-S2 && \
+    git -C /src/Direct3D-S2 checkout "${DIRECT3D_S2_REF}" && \
+    pip wheel --no-cache-dir --no-build-isolation --no-deps /src/Direct3D-S2/third_party/voxelize -w /wheels
+
+RUN git clone https://github.com/NVlabs/nvdiffrast.git /src/nvdiffrast && \
+    git -C /src/nvdiffrast checkout "${NVDIFFRAST_REF}" && \
+    pip wheel --no-cache-dir --no-build-isolation --no-deps /src/nvdiffrast -w /wheels
+
+# ---------------------------------------------------------------------------
+# mesh3d — base + Direct3D-S2 (published as the -3d tags). Built from base, not sage, and runs
+# with sage attention off. Every package already in base is held at its version (constraints),
+# so the 3D deps cannot move torch, numpy or anything the other baked packs rely on.
+# ---------------------------------------------------------------------------
+FROM base AS mesh3d
+
+ARG DIRECT3D_S2_REF=a1cf235b2881cff04a91900060a9546b40e7ee5d
+ARG UTILS3D_REF=9a4eb15e4021b67b12c460c7057d642626897ec8
+
+COPY --from=d3d-build /wheels/*.whl /tmp/wheels/
+RUN pip list --format=freeze > /tmp/constraints.txt && \
+    pip install --no-cache-dir --constraint /tmp/constraints.txt \
+        /tmp/wheels/*.whl \
+        "spconv-cu126==2.3.8" \
+        "trimesh==5.1.1" \
+        "scikit-image==0.26.0" \
+        "omegaconf==2.3.1" \
+        "diffusers==0.40.0" \
+        "pymeshfix==0.18.1" \
+        "pyvista==0.49.0" \
+        "igraph==1.0.0" \
+        "einops==0.8.2" \
+        "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@${UTILS3D_REF}" && \
+    rm -rf /tmp/wheels /tmp/constraints.txt
+
+# Upstream has no installable package (no direct3d_s2/__init__.py), so put the pinned checkout on
+# sys.path with a .pth file.
+RUN git clone https://github.com/DreamTechAI/Direct3D-S2.git /opt/direct3d-s2 && \
+    git -C /opt/direct3d-s2 checkout "${DIRECT3D_S2_REF}" && \
+    echo /opt/direct3d-s2 > "$(python -c 'import site; print(site.getsitepackages()[0])')/direct3d-s2.pth"
+
+COPY nodes/ComfyUI-Direct3D-S2 /opt/comfyui-baked-nodes/ComfyUI-Direct3D-S2
+
+# Guard: the full Direct3D-S2 import chain resolves without a GPU, on the spconv backend.
+RUN SPARSE_BACKEND=spconv python -c "import flash_attn, udf_ext, nvdiffrast.torch, spconv.pytorch, \
+    direct3d_s2.pipeline, torch; print('direct3d-s2 OK on torch', torch.__version__, \
+    'flash-attn', flash_attn.__version__)"
+
+ENV USE_SAGE_ATTENTION=0
