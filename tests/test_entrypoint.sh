@@ -268,7 +268,8 @@ unset HF_HOME TORCH_HOME
 # --- Category-gated baked-node seeding: master SEED_BAKED_NODES + per-category SEED_*_NODES ---
 BAKED_NODES_DIR="$workdir/baked_cat"
 for p in TTS-Audio-Suite ComfyUI-WanVideoWrapper ComfyUI-VideoHelperSuite ComfyUI-Frame-Interpolation \
-         ComfyUI-KJNodes ComfyUI_essentials ComfyUI_HuggingFace_Downloader comfyui-ollama; do
+         ComfyUI-KJNodes ComfyUI_essentials ComfyUI_HuggingFace_Downloader comfyui-ollama \
+         ComfyUI-Direct3D-S2; do
     mkdir -p "$BAKED_NODES_DIR/$p"; echo x > "$BAKED_NODES_DIR/$p/marker"
 done
 
@@ -279,6 +280,7 @@ assert_eq "video"  "$(baked_node_category ComfyUI-Frame-Interpolation)"    "Fram
 assert_eq "helper" "$(baked_node_category ComfyUI-KJNodes)"                "KJNodes -> helper"
 assert_eq "helper" "$(baked_node_category ComfyUI_HuggingFace_Downloader)" "HF Downloader -> helper"
 assert_eq "llm"    "$(baked_node_category comfyui-ollama)"                 "comfyui-ollama -> llm"
+assert_eq "3d"     "$(baked_node_category ComfyUI-Direct3D-S2)"            "Direct3D-S2 -> 3d"
 assert_eq ""       "$(baked_node_category SomeUnknownPack)"                "unknown pack -> uncategorized"
 
 # Default (all flags unset): every category seeds.
@@ -321,6 +323,17 @@ assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-KJNodes" ]'         "SEED_LLM_NODES
 CUSTOM_NODES_DIR="$workdir/cn_cat_all_llm"; mkdir -p "$CUSTOM_NODES_DIR"
 ( unset SEED_BAKED_NODES SEED_AUDIO_NODES SEED_VIDEO_NODES SEED_HELPER_NODES SEED_LLM_NODES; seed_baked_nodes )
 assert_true '[ -d "$CUSTOM_NODES_DIR/comfyui-ollama" ]'          "default seeds the llm pack"
+
+# 3D category off: Direct3D-S2 skipped; the other categories still seed.
+CUSTOM_NODES_DIR="$workdir/cn_cat_no3d"; mkdir -p "$CUSTOM_NODES_DIR"
+SEED_3D_NODES=0 seed_baked_nodes
+assert_true '[ ! -e "$CUSTOM_NODES_DIR/ComfyUI-Direct3D-S2" ]'    "SEED_3D_NODES=0 skips ComfyUI-Direct3D-S2"
+assert_true '[ -d "$CUSTOM_NODES_DIR/comfyui-ollama" ]'          "SEED_3D_NODES=0 still seeds llm"
+
+# Default (all flags unset) also seeds the 3d pack.
+CUSTOM_NODES_DIR="$workdir/cn_cat_all_3d"; mkdir -p "$CUSTOM_NODES_DIR"
+( unset SEED_BAKED_NODES SEED_3D_NODES; seed_baked_nodes )
+assert_true '[ -d "$CUSTOM_NODES_DIR/ComfyUI-Direct3D-S2" ]'     "default seeds the 3d pack"
 
 # --- ensure_protobuf_runtime: re-assert the protobuf floor AFTER the on-boot custom-node loop ---
 # User packs (e.g. comfyui-rmbg pins protobuf<6) downgrade protobuf during install_node_requirements,
