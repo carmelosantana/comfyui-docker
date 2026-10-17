@@ -286,8 +286,7 @@ The `-3d` image (`docker build --target mesh3d .`) is `base` plus
 [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`,
 not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
 
-- **Why a separate image:** Direct3D-S2 needs flash-attn, nvdiffrast and a small CUDA extension
-  (`udf_ext`). They are compiled in a devel stage against the image's own torch 2.9.1 / CUDA 12.8
+- **Why a separate image:** Direct3D-S2 needs flash-attn and a small CUDA extension (`udf_ext`). They are compiled in a devel stage against the image's own torch 2.9.1 / CUDA 12.8
   for the 3090 (sm_86). The sparse-conv backend is spconv (prebuilt wheel), not torchsparse. Every
   package already in `base` is held at its version while the 3D deps install, so they cannot move
   torch or anything the other packs use. `latest` and `latest-sage` are unchanged.
@@ -296,8 +295,15 @@ not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
   use a third-party wrapper. Upstream code is pinned to `a1cf235`.
 - **Inputs:** wire `LoadImage`'s `IMAGE` *and* `MASK` to pass an RGBA image. The pipeline then
   skips background removal. Without a mask it runs BiRefNet.
-- **Licences:** the chain is DINOv2 (Apache-2.0) and BiRefNet (MIT), both pinned to fixed commits
-  because both run remote code on first use. Do not swap in DINOv3 or RMBG-2.0 (non-commercial).
+- **Licences:** only permissive code ships. Direct3D-S2 code and weights are MIT, flash-attn is
+  BSD-3, and spconv/cumm are Apache-2.0. The image encoder is DINOv2 (Apache-2.0) and background
+  removal is BiRefNet (MIT). Both run remote code on first use, so both are pinned to fixed commits.
+  Do not swap in DINOv3 or RMBG (non-commercial). Upstream's optional `remesh` step is removed. It
+  needs nvdiffrast (research-only) and pymeshfix/igraph (GPL), so none of those are installed, and
+  a build guard fails if they appear.
+- **Pickled weights:** the `.ckpt` files are loaded with `torch.load(weights_only=True)`, and a build
+  guard keeps it that way. Weights are pinned to HF revision `8b04a8e`. Once they are staged in
+  `HF_HOME`, `HF_HUB_OFFLINE=1` loads that same snapshot with no network.
 - **Weights:** `wushuang98/Direct3D-S2` (~4.2 GB for one version), DINOv2 ViT-L/14-reg (~1.2 GB),
   and BiRefNet if used. They download on the first loader run into `HF_HOME`/`TORCH_HOME` on the
   `models` mount. Nothing is baked.

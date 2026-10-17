@@ -20,6 +20,7 @@ os.environ.setdefault("SPARSE_BACKEND", "spconv")
 
 CATEGORY = "Direct3D-S2"
 WEIGHTS_REPO = "wushuang98/Direct3D-S2"
+WEIGHTS_REF = "8b04a8eddb7a56a0f4e89fe5f5b840c7d5610c00"  # MIT
 WEIGHT_FILES = ("config.yaml", "model_dense.ckpt", "model_sparse_512.ckpt", "model_sparse_1024.ckpt",
                 "model_refiner.ckpt", "model_refiner_1024.ckpt")
 # Both run remote code on first use, so pin it. Licence-cleared chain: DINOv2 (Apache-2.0) and
@@ -93,21 +94,23 @@ class Direct3DS2ModelLoader:
     def load(self, version):
         import comfy.model_management as mm
         from direct3d_s2.pipeline import Direct3DS2Pipeline
-        from huggingface_hub import hf_hub_download
+        from huggingface_hub import snapshot_download
 
-        # Weights (~4.2 GB) download once into HF_HOME, which lives on the models mount.
+        # Weights (~4.2 GB) download once into HF_HOME, on the models mount. With them staged,
+        # HF_HUB_OFFLINE=1 resolves the same pinned snapshot with no network. Upstream loads the
+        # .ckpt pickles with torch.load(weights_only=True).
+        snapshot = snapshot_download(WEIGHTS_REPO, revision=WEIGHTS_REF, allow_patterns=[f"{version}/*"])
+        weights_dir = os.path.join(snapshot, version)
         with pinned_dinov2():
-            pipeline = Direct3DS2Pipeline.from_pretrained(WEIGHTS_REPO, subfolder=version)
+            pipeline = Direct3DS2Pipeline.from_pretrained(weights_dir)
         pipeline.to(mm.get_torch_device())
-        weights = {
-            name: sha256_file(hf_hub_download(WEIGHTS_REPO, name, subfolder=version))
-            for name in WEIGHT_FILES
-        }
+        weights = {name: sha256_file(os.path.join(weights_dir, name)) for name in WEIGHT_FILES}
         dinov2 = os.path.join(torch.hub.get_dir(), "checkpoints", DINOV2_CHECKPOINT)
         if os.path.isfile(dinov2):
             weights[DINOV2_CHECKPOINT] = sha256_file(dinov2)
         pipeline.provenance = {
             "weights_repo": WEIGHTS_REPO,
+            "weights_revision": WEIGHTS_REF,
             "version": version,
             "weights": weights,
             "dinov2": f"{DINOV2_REPO}@{DINOV2_REF}",
@@ -125,8 +128,6 @@ class Direct3DS2ImageToMesh:
                 # 512 needs ~10 GB VRAM, 1024 ~24 GB.
                 "sdf_resolution": (["1024", "512"],),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
-                "remesh": ("BOOLEAN", {"default": False}),
-                "simplify_ratio": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {"mask": ("MASK",)},
         }
@@ -136,7 +137,7 @@ class Direct3DS2ImageToMesh:
     FUNCTION = "generate"
     CATEGORY = CATEGORY
 
-    def generate(self, pipeline, image, sdf_resolution, seed, remesh, simplify_ratio, mask=None):
+    def generate(self, pipeline, image, sdf_resolution, seed, mask=None):
         pil = to_pil(image, mask)
         if pil.mode == "RGBA":
             background_removal = "none (RGBA input)"
@@ -149,15 +150,14 @@ class Direct3DS2ImageToMesh:
             pil,
             sdf_resolution=int(sdf_resolution),
             generator=generator,
-            remesh=remesh,
-            simplify_ratio=simplify_ratio,
+            # Upstream's remesh needs nvdiffrast (research-only) and GPL pymeshfix/igraph; the
+            # image ships none of them, so it stays off.
+            remesh=False,
         )["mesh"]
         mesh.metadata["direct3d_s2"] = {
             **getattr(pipeline, "provenance", {}),
             "seed": seed,
             "sdf_resolution": int(sdf_resolution),
-            "remesh": remesh,
-            "simplify_ratio": simplify_ratio,
             "background_removal": background_removal,
             # Hash of the exact pixels the pipeline received (the source file is not visible here).
             "input": {"mode": pil.mode, "size": list(pil.size),

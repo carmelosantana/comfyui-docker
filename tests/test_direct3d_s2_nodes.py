@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 import torch
@@ -74,24 +75,20 @@ class ImageToMeshTests(unittest.TestCase):
     def test_passes_settings_and_seeded_generator(self):
         pipe = FakePipeline()
         pipe.birefnet_model = object()  # skip loading the real BiRefNet
-        (mesh,) = nodes.Direct3DS2ImageToMesh().generate(
-            pipe, torch.ones(1, 4, 6, 3), "512", 7, True, 0.9, mask=None
-        )
+        (mesh,) = nodes.Direct3DS2ImageToMesh().generate(pipe, torch.ones(1, 4, 6, 3), "512", 7, mask=None)
         self.assertIsInstance(mesh, FakeMesh)
         image, kwargs = pipe.calls[0]
         self.assertIsInstance(image, Image.Image)
         self.assertEqual(kwargs["sdf_resolution"], 512)
-        self.assertTrue(kwargs["remesh"])
-        self.assertEqual(kwargs["simplify_ratio"], 0.9)
+        # remesh needs nvdiffrast (research-only) and GPL pymeshfix/igraph, none of which ship.
+        self.assertFalse(kwargs["remesh"])
         self.assertEqual(kwargs["generator"].initial_seed(), 7)
 
 
     def test_records_provenance_on_mesh(self):
         pipe = FakePipeline()
         mask = torch.zeros(1, 4, 6)
-        (mesh,) = nodes.Direct3DS2ImageToMesh().generate(
-            pipe, torch.ones(1, 4, 6, 3), "1024", 42, False, 0.95, mask=mask
-        )
+        (mesh,) = nodes.Direct3DS2ImageToMesh().generate(pipe, torch.ones(1, 4, 6, 3), "1024", 42, mask=mask)
         prov = mesh.metadata["direct3d_s2"]
         image = pipe.calls[0][0]
         self.assertEqual((prov["seed"], prov["sdf_resolution"]), (42, 1024))
@@ -99,6 +96,57 @@ class ImageToMeshTests(unittest.TestCase):
         self.assertEqual(prov["input"]["mode"], "RGBA")
         self.assertEqual(prov["input"]["pixel_sha256"], hashlib.sha256(image.tobytes()).hexdigest())
         self.assertEqual(prov["background_removal"], "none (RGBA input)")
+
+
+class LoaderTests(unittest.TestCase):
+    def test_loads_pinned_snapshot_and_hashes_its_files(self):
+        calls = {}
+        with tempfile.TemporaryDirectory() as snap, tempfile.TemporaryDirectory() as hub:
+            os.makedirs(os.path.join(snap, "direct3d-s2-v-1-1"))
+            for name in nodes.WEIGHT_FILES:
+                with open(os.path.join(snap, "direct3d-s2-v-1-1", name), "wb") as f:
+                    f.write(name.encode())
+
+            def snapshot_download(repo_id, **kwargs):
+                calls["snapshot"] = (repo_id, kwargs)
+                return snap
+
+            class FakeD3D:
+                @classmethod
+                def from_pretrained(cls, path):
+                    calls["from_pretrained"] = path
+                    return FakePipeline()
+
+                def to(self, device):
+                    pass
+
+            FakePipeline.to = lambda self, device: None
+            fakes = {
+                "direct3d_s2.pipeline": types.SimpleNamespace(Direct3DS2Pipeline=FakeD3D),
+                "comfy.model_management": types.SimpleNamespace(get_torch_device=lambda: "cpu"),
+                "huggingface_hub": types.SimpleNamespace(snapshot_download=snapshot_download),
+            }
+            saved = {k: sys.modules.get(k) for k in fakes}
+            sys.modules.update(fakes)
+            real_hub_dir = torch.hub.get_dir()
+            torch.hub.set_dir(hub)
+            try:
+                (pipe,) = nodes.Direct3DS2ModelLoader().load("direct3d-s2-v-1-1")
+            finally:
+                torch.hub.set_dir(real_hub_dir)
+                for k, v in saved.items():
+                    if v is None:
+                        sys.modules.pop(k, None)
+                    else:
+                        sys.modules[k] = v
+
+        self.assertEqual(calls["snapshot"], (nodes.WEIGHTS_REPO, {
+            "revision": nodes.WEIGHTS_REF, "allow_patterns": ["direct3d-s2-v-1-1/*"]}))
+        self.assertEqual(calls["from_pretrained"], os.path.join(snap, "direct3d-s2-v-1-1"))
+        prov = pipe.provenance
+        self.assertEqual(prov["weights_revision"], nodes.WEIGHTS_REF)
+        self.assertEqual(prov["weights"]["config.yaml"], hashlib.sha256(b"config.yaml").hexdigest())
+        self.assertEqual(set(prov["weights"]), set(nodes.WEIGHT_FILES))
 
 
 class PinTests(unittest.TestCase):
