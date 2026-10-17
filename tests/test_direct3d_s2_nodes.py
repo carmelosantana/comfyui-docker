@@ -5,7 +5,9 @@ Run inside the -3d image (it has torch, PIL and ComfyUI's folder_paths):
       /repo/tests/test_direct3d_s2_nodes.py
 """
 
+import hashlib
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -25,19 +27,23 @@ spec.loader.exec_module(pack)
 nodes = sys.modules["d3ds2_pack.nodes"]
 
 
-class FakePipeline:
-    def __init__(self):
-        self.calls = []
-
-    def __call__(self, image, **kwargs):
-        self.calls.append((image, kwargs))
-        return {"mesh": "MESH"}
-
-
 class FakeMesh:
+    def __init__(self):
+        self.metadata = {}
+
     def export(self, path):
         with open(path, "w") as f:
             f.write("mesh")
+
+
+class FakePipeline:
+    def __init__(self):
+        self.calls = []
+        self.provenance = {"weights": {"model_dense.ckpt": "abc"}}
+
+    def __call__(self, image, **kwargs):
+        self.calls.append((image, kwargs))
+        return {"mesh": FakeMesh()}
 
 
 class MappingTests(unittest.TestCase):
@@ -67,16 +73,59 @@ class ToPilTests(unittest.TestCase):
 class ImageToMeshTests(unittest.TestCase):
     def test_passes_settings_and_seeded_generator(self):
         pipe = FakePipeline()
+        pipe.birefnet_model = object()  # skip loading the real BiRefNet
         (mesh,) = nodes.Direct3DS2ImageToMesh().generate(
             pipe, torch.ones(1, 4, 6, 3), "512", 7, True, 0.9, mask=None
         )
-        self.assertEqual(mesh, "MESH")
+        self.assertIsInstance(mesh, FakeMesh)
         image, kwargs = pipe.calls[0]
         self.assertIsInstance(image, Image.Image)
         self.assertEqual(kwargs["sdf_resolution"], 512)
         self.assertTrue(kwargs["remesh"])
         self.assertEqual(kwargs["simplify_ratio"], 0.9)
         self.assertEqual(kwargs["generator"].initial_seed(), 7)
+
+
+    def test_records_provenance_on_mesh(self):
+        pipe = FakePipeline()
+        mask = torch.zeros(1, 4, 6)
+        (mesh,) = nodes.Direct3DS2ImageToMesh().generate(
+            pipe, torch.ones(1, 4, 6, 3), "1024", 42, False, 0.95, mask=mask
+        )
+        prov = mesh.metadata["direct3d_s2"]
+        image = pipe.calls[0][0]
+        self.assertEqual((prov["seed"], prov["sdf_resolution"]), (42, 1024))
+        self.assertEqual(prov["weights"], {"model_dense.ckpt": "abc"})
+        self.assertEqual(prov["input"]["mode"], "RGBA")
+        self.assertEqual(prov["input"]["pixel_sha256"], hashlib.sha256(image.tobytes()).hexdigest())
+        self.assertEqual(prov["background_removal"], "none (RGBA input)")
+
+
+class PinTests(unittest.TestCase):
+    def test_dinov2_hub_load_is_pinned_only_inside_context(self):
+        seen = []
+        real = torch.hub.load
+        torch.hub.load = lambda repo, *a, **k: seen.append(repo)
+        try:
+            with nodes.pinned_dinov2():
+                torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14_reg")
+                torch.hub.load("someone/else", "x")
+            torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14_reg")
+        finally:
+            torch.hub.load = real
+        self.assertEqual(seen, [
+            f"facebookresearch/dinov2:{nodes.DINOV2_REF}",
+            "someone/else",
+            "facebookresearch/dinov2",
+        ])
+
+    def test_sha256_file(self):
+        with tempfile.NamedTemporaryFile("wb", delete=False) as f:
+            f.write(b"hello")
+        try:
+            self.assertEqual(nodes.sha256_file(f.name), hashlib.sha256(b"hello").hexdigest())
+        finally:
+            os.unlink(f.name)
 
 
 class SaveMeshTests(unittest.TestCase):
@@ -89,6 +138,18 @@ class SaveMeshTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(path))
             self.assertTrue(saved["filename"].startswith("d3d_") and saved["filename"].endswith(".glb"))
             self.assertEqual((saved["subfolder"], saved["type"]), ("3d", "output"))
+
+    def test_writes_provenance_sidecar(self):
+        with tempfile.TemporaryDirectory() as out:
+            folder_paths.set_output_directory(out)
+            mesh = FakeMesh()
+            mesh.metadata["direct3d_s2"] = {"seed": 42}
+            saved = nodes.Direct3DS2SaveMesh().save(mesh, "d3d", "glb")["ui"]["meshes"][0]
+            path = os.path.join(out, saved["filename"])
+            with open(path + ".json") as f:
+                sidecar = json.load(f)
+            self.assertEqual(sidecar["seed"], 42)
+            self.assertEqual(sidecar["output"], {"filename": saved["filename"], "sha256": nodes.sha256_file(path)})
 
 
 if __name__ == "__main__":
