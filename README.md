@@ -290,7 +290,7 @@ The `-3d` image (`docker build --target mesh3d .`) is `base` plus
 [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`,
 not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
 
-- **Why a separate image:** Direct3D-S2 needs flash-attn and a small CUDA extension (`udf_ext`). They are compiled in a devel stage against the image's own torch 2.9.1 / CUDA 12.8
+- **Why a separate image:** Direct3D-S2 needs flash-attn and a small CUDA extension (`udf_ext`). They are compiled in a devel stage against the image's own torch 2.9.1 / CUDA 13.0
   for the 3090 (sm_86). The sparse-conv backend is spconv (prebuilt wheel), not torchsparse. Every
   package already in `base` is held at its version while the 3D deps install, so they cannot move
   torch or anything the other packs use. `latest` and `latest-sage` are unchanged.
