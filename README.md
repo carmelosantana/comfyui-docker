@@ -282,6 +282,10 @@ prebuilt wheels.
 
 ## Direct3D-S2 (`-3d` tags)
 
+> **Experimental — not for deployment.** Production Direct3D-S2 runs stay in the separate sandboxed
+> (`--network=none`) script. This image is not run on the shared GPU host, and its outputs are not
+> used for shipped work.
+
 The `-3d` image (`docker build --target mesh3d .`) is `base` plus
 [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`,
 not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
