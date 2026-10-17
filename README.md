@@ -58,6 +58,7 @@ can turn off with an env var; `SEED_BAKED_NODES=0` disables all seeding at once.
 | [comfyui-ollama](https://github.com/stavsap/comfyui-ollama) | llm (`SEED_LLM_NODES`) | In-graph Ollama LLM nodes (`OllamaGenerateV2`, vision, etc.) for prompt-building / captioning. Needs a reachable Ollama server (host or network) |
 | [ComfyUI-AdvancedTiling](https://github.com/JosefKuchar/ComfyUI-AdvancedTiling) | texture (`SEED_TEXTURE_NODES`) | Seamless/tileable generation via circular padding and toroidal attention (GPL-3.0). Seeded as `comfyui-advanced-tiling`, the dir Manager installs it to |
 | [ComfyUI-Universal-Seamless-Tiles](https://github.com/OliverCrosby/ComfyUI-Universal-Seamless-Tiles) | texture (`SEED_TEXTURE_NODES`) | Seamless tiling for DiT models (Flux and friends) |
+| [ComfyUI-Direct3D-S2](nodes/ComfyUI-Direct3D-S2) (this repo) | 3d (`SEED_3D_NODES`) | **`-3d` images only.** Image → mesh with [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2). See [Direct3D-S2](#direct3d-s2--3d-tags) |
 
 > **Audio models are ComfyUI core (no pack to seed):** on ComfyUI `0.33.1` the **MiniMax-Music3**
 > (`MiniMaxMusic3TextEncode`, `EmptyMiniMaxMusic3LatentAudio`) and **ACE-Step** 1.0/1.5
@@ -151,11 +152,12 @@ recreate.
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip the helper packs (KJNodes, essentials, HuggingFace Downloader) |
 | `SEED_LLM_NODES` | `1` | Set `0` to skip the LLM pack (comfyui-ollama) |
 | `SEED_TEXTURE_NODES` | `1` | Set `0` to skip the texture tiling packs (AdvancedTiling, Universal-Seamless-Tiles) |
+| `SEED_3D_NODES` | `1` | Set `0` to skip the 3D pack (ComfyUI-Direct3D-S2). Only the `-3d` image bakes it |
 | `BOOTSTRAP_NODES` | unset | Set `1` to git-clone **extra** packs from `scripts/node-manifest.txt` on first boot. The supported packs are already baked in — this is only for additions |
 | `MANAGER_NETWORK_MODE` | `personal_cloud` | Manager v4 network mode, **enforced** into `user/__manager/config.ini` every boot. `personal_cloud` is **required** to unlock the install/model management API on a box that listens on `0.0.0.0` — Manager blocks those actions for `public`/`private`/`offline` on a non-loopback listen. Set to `public` to lock the box down when exposed publicly |
 | `MANAGER_SECURITY_LEVEL` | `normal` | Manager v4 security level, enforced into `user/__manager/config.ini` every boot. `normal` is the least-permissive level that still allows arbitrary git-URL node installs and arbitrary-URL model downloads via the API; `strong` blocks them |
 | `MANAGER_CHANNEL_URL` | `default` channel URL | Enforced as Manager's `channel_url` every boot (with `default_cache_as_channel_url = True`) so Manager's own boot refresh of `custom-node-list.json` lands in the cache file that installs read. Without it, pip-mode Manager 4.2.x only sees the list bundled in its wheel and git-only packs added upstream later fail with "not found in [default, remote]". Defaults to the `default::` entry of `user/__manager/channels.list` (or Manager's template) |
-| `USE_SAGE_ATTENTION` | `1` in `-sage` images, else unset | On the `-sage` image, appends `--use-sage-attention` (and drops `--use-pytorch-cross-attention`). Set `0` to disable. No effect on the base image |
+| `USE_SAGE_ATTENTION` | `1` in `-sage` images, `0` in `-3d`, else unset | On the `-sage` image, appends `--use-sage-attention` (and drops `--use-pytorch-cross-attention`). Set `0` to disable. No effect on the base image |
 
 ## Versioning
 
@@ -164,11 +166,13 @@ ComfyUI is inside*:
 
 | Tag | Meaning | Mutable? |
 | --- | --- | --- |
-| `latest` / `latest-sage` | Newest build (moves on every `main` merge) | yes |
+| `latest` / `latest-sage` / `latest-3d` | Newest build (moves on every `main` merge) | yes |
 | `YY.MM.DD` / `YY.MM.DD-sage` | A dated, frozen snapshot | no |
 | `comfyui-<ver>` / `-sage` | Newest build of a given ComfyUI version | yes |
 | `YY.MM.DD-comfyui-<ver>` / `-sage` | Dated snapshot + its ComfyUI version | no |
 | `sha-<sha>` / `-sage` | Exact commit build | no |
+
+Every `-sage` row has a matching `-3d` tag.
 
 - **Track current:** leave `IMAGE_TAG` unset (defaults to `latest` / `latest-sage`) and
   `docker compose pull && docker compose up -d` to refresh.
@@ -225,6 +229,7 @@ The voice, video, helper, LLM, and texture node packs listed in
 | `SEED_HELPER_NODES` | `1` | Set `0` to skip KJNodes, essentials, HuggingFace Downloader |
 | `SEED_LLM_NODES` | `1` | Set `0` to skip comfyui-ollama |
 | `SEED_TEXTURE_NODES` | `1` | Set `0` to skip AdvancedTiling and Universal-Seamless-Tiles |
+| `SEED_3D_NODES` | `1` | Set `0` to skip ComfyUI-Direct3D-S2 (`-3d` images only) |
 
 To add packs **beyond** the baked set, install them from ComfyUI-Manager, drop them into the
 `custom_nodes` mount, or list their git URLs in `scripts/node-manifest.txt` and set
@@ -274,6 +279,34 @@ prebuilt wheels.
 > correct) and enable Sage **per-workflow** on the video model with KJNodes'
 > **"Patch Sage Attention KJ"** node — that scopes the speedup to the graph that benefits, instead
 > of the process-wide flag that breaks image gen.
+
+## Direct3D-S2 (`-3d` tags)
+
+The `-3d` image (`docker build --target mesh3d .`) is `base` plus
+[Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`,
+not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
+
+- **Why a separate image:** Direct3D-S2 needs flash-attn, nvdiffrast and a small CUDA extension
+  (`udf_ext`). They are compiled in a devel stage against the image's own torch 2.9.1 / CUDA 12.8
+  for the 3090 (sm_86). The sparse-conv backend is spconv (prebuilt wheel), not torchsparse. Every
+  package already in `base` is held at its version while the 3D deps install, so they cannot move
+  torch or anything the other packs use. `latest` and `latest-sage` are unchanged.
+- **Nodes:** `Direct3DS2ModelLoader` → `Direct3DS2ImageToMesh` → `Direct3DS2SaveMesh`. A small pack
+  that lives in this repo ([`nodes/ComfyUI-Direct3D-S2`](nodes/ComfyUI-Direct3D-S2)). It does not
+  use a third-party wrapper. Upstream code is pinned to `a1cf235`.
+- **Inputs:** wire `LoadImage`'s `IMAGE` *and* `MASK` to pass an RGBA image. The pipeline then
+  skips background removal. Without a mask it runs BiRefNet.
+- **Licences:** the chain is DINOv2 (Apache-2.0) and BiRefNet (MIT), both pinned to fixed commits
+  because both run remote code on first use. Do not swap in DINOv3 or RMBG-2.0 (non-commercial).
+- **Weights:** `wushuang98/Direct3D-S2` (~4.2 GB for one version), DINOv2 ViT-L/14-reg (~1.2 GB),
+  and BiRefNet if used. They download on the first loader run into `HF_HOME`/`TORCH_HOME` on the
+  `models` mount. Nothing is baked.
+- **VRAM:** `sdf_resolution` 512 needs ~10 GB, 1024 ~24 GB (a 3090 just fits).
+- **Provenance:** each saved mesh gets a `<file>.json` sidecar. It records the seed, resolution,
+  weights version and sha256 of every weight file. It also holds the input's pixel sha256 (hash of
+  the exact RGBA pixels passed in, not the source file) and the mesh's own sha256.
+- **Verified:** CI builds the image, runs the pack's unit tests, boots `--cpu` and checks the
+  three nodes register. A real GPU render has not been run in CI.
 
 ## Publishing (maintainer note)
 
