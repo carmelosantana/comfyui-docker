@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add an **experimental** (not deployed) **`-3d`** image (`--target mesh3d`; `latest-3d`, `YY.MM.DD-3d`, …) with
+  [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`
+  (no sage, `USE_SAGE_ATTENTION=0`). flash-attn 2.8.3.post1 and `udf_ext` are compiled for sm_86
+  against the image's torch. spconv comes from its prebuilt wheel. Base packages are held
+  by constraints. A new `3d` seeding category (`SEED_3D_NODES`) seeds this repo's own
+  `nodes/ComfyUI-Direct3D-S2` pack. DINOv2 and BiRefNet remote code and the weights revision are
+  pinned, and each saved mesh gets a provenance sidecar. Upstream's `remesh` step is cut out
+  because it needs nvdiffrast (research-only) and pymeshfix/igraph (GPL). CI adds a `build-3d` job.
 - Fix Qwen3-TTS (Shared Runtime) and the GraniteASR word-timestamp aligner dying with "Worker closed
   the response stream unexpectedly" (Qwen3-TTS then returns silence as a success). TTS-Audio-Suite
   `871c97f` isolated workers add the suite root to `sys.path` only if it is missing, and the launcher

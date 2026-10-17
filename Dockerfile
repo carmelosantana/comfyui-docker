@@ -247,3 +247,77 @@ RUN python -c "import torch, sageattention; print('sage ok on torch', torch.__ve
 
 # Swap-and-go: the -sage tag runs with sage attention on. Set to 0 to A/B without a rebuild.
 ENV USE_SAGE_ATTENTION=1
+
+# ---------------------------------------------------------------------------
+# d3d-build — compile Direct3D-S2's CUDA pieces in the devel twin, against the image's own torch
+# (no flash-attn wheel exists for torch 2.9). No GPU needed: everything cross-compiles for the
+# 3090. flash-attn's sm_80 kernels run on sm_86, so only sm_80 is built.
+# ---------------------------------------------------------------------------
+FROM pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-devel AS d3d-build
+
+# Pins resolved 2026-10-17. flash-attn 2.8.3.post2 is skipped: published 2026-10-14 (too new).
+ARG FLASH_ATTN_VERSION=2.8.3.post1
+ARG DIRECT3D_S2_REF=a1cf235b2881cff04a91900060a9546b40e7ee5d
+ARG D3D_CUDA_ARCH=8.6
+# flash-attn needs several GB of RAM per compile job; raise on a bigger build host.
+ARG D3D_MAX_JOBS=2
+
+RUN apt-get update --assume-yes && \
+    apt-get install --assume-yes --no-install-recommends git build-essential ninja-build && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir ninja packaging psutil einops wheel
+
+ENV TORCH_CUDA_ARCH_LIST=${D3D_CUDA_ARCH} \
+    FLASH_ATTN_CUDA_ARCHS=80 \
+    FLASH_ATTENTION_FORCE_BUILD=TRUE \
+    MAX_JOBS=${D3D_MAX_JOBS} \
+    NVCC_THREADS=2
+
+RUN pip wheel --no-cache-dir --no-build-isolation --no-deps "flash-attn==${FLASH_ATTN_VERSION}" -w /wheels
+
+RUN git clone https://github.com/DreamTechAI/Direct3D-S2.git /src/Direct3D-S2 && \
+    git -C /src/Direct3D-S2 checkout "${DIRECT3D_S2_REF}" && \
+    pip wheel --no-cache-dir --no-build-isolation --no-deps /src/Direct3D-S2/third_party/voxelize -w /wheels
+
+# ---------------------------------------------------------------------------
+# mesh3d — base + Direct3D-S2 (published as the -3d tags). Built from base, not sage, and runs
+# with sage attention off. Every package already in base is held at its version (constraints),
+# so the 3D deps cannot move torch, numpy or anything the other baked packs rely on.
+# Licences: only permissive code ships (MIT/BSD/Apache). Upstream's optional remesh step needs
+# nvdiffrast (research-only) and pymeshfix/igraph (GPL), so it is cut out and they are not installed.
+# ---------------------------------------------------------------------------
+FROM base AS mesh3d
+
+ARG DIRECT3D_S2_REF=a1cf235b2881cff04a91900060a9546b40e7ee5d
+
+# diffusers, einops, omegaconf and scikit-image already come with base (its versions win); the
+# import guard below fails the build if base ever stops providing them.
+COPY --from=d3d-build /wheels/*.whl /tmp/wheels/
+RUN pip list --format=freeze > /tmp/constraints.txt && \
+    pip install --no-cache-dir --constraint /tmp/constraints.txt \
+        /tmp/wheels/*.whl \
+        "spconv-cu126==2.3.8" \
+        "trimesh==5.1.1" && \
+    rm -rf /tmp/wheels /tmp/constraints.txt
+
+# Upstream has no installable package (no direct3d_s2/__init__.py), so put the pinned checkout on
+# sys.path with a .pth file. Drop the eager remesh import (fill_hole -> utils3d/nvdiffrast,
+# pymeshfix, igraph); the pipeline only reaches it when remesh=True, which the nodes never pass.
+RUN git clone https://github.com/DreamTechAI/Direct3D-S2.git /opt/direct3d-s2 && \
+    git -C /opt/direct3d-s2 checkout "${DIRECT3D_S2_REF}" && \
+    sed -i '/^from \.fill_hole import postprocess_mesh$/d' /opt/direct3d-s2/direct3d_s2/utils/__init__.py && \
+    ! grep -q fill_hole /opt/direct3d-s2/direct3d_s2/utils/__init__.py && \
+    echo /opt/direct3d-s2 > "$(python -c 'import site; print(site.getsitepackages()[0])')/direct3d-s2.pth"
+
+COPY nodes/ComfyUI-Direct3D-S2 /opt/comfyui-baked-nodes/ComfyUI-Direct3D-S2
+
+# Guards: the Direct3D-S2 import chain resolves without a GPU on the spconv backend; no blocked
+# package is installed; every upstream torch.load stays weights_only=True (the .ckpt files are pickles).
+RUN SPARSE_BACKEND=spconv python -c "import flash_attn, udf_ext, spconv.pytorch, \
+    direct3d_s2.pipeline, torch; print('direct3d-s2 OK on torch', torch.__version__, \
+    'flash-attn', flash_attn.__version__)" && \
+    ! pip list --format=freeze | grep -iE '^(nvdiffrast|pymeshfix|igraph|python-igraph|utils3d)==' && \
+    ! grep -rn "torch.load(" /opt/direct3d-s2/direct3d_s2 | grep -v "weights_only=True"
+
+ENV USE_SAGE_ATTENTION=0
