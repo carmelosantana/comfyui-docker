@@ -291,16 +291,14 @@ FROM base AS mesh3d
 
 ARG DIRECT3D_S2_REF=a1cf235b2881cff04a91900060a9546b40e7ee5d
 
+# diffusers, einops, omegaconf and scikit-image already come with base (its versions win); the
+# import guard below fails the build if base ever stops providing them.
 COPY --from=d3d-build /wheels/*.whl /tmp/wheels/
 RUN pip list --format=freeze > /tmp/constraints.txt && \
     pip install --no-cache-dir --constraint /tmp/constraints.txt \
         /tmp/wheels/*.whl \
         "spconv-cu126==2.3.8" \
-        "trimesh==5.1.1" \
-        "scikit-image==0.26.0" \
-        "omegaconf==2.3.1" \
-        "diffusers==0.40.0" \
-        "einops==0.8.2" && \
+        "trimesh==5.1.1" && \
     rm -rf /tmp/wheels /tmp/constraints.txt
 
 # Upstream has no installable package (no direct3d_s2/__init__.py), so put the pinned checkout on
