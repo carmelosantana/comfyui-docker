@@ -320,10 +320,17 @@ RUN pip list --format=freeze > /tmp/constraints.txt && \
         "trimesh==5.1.1" && \
     rm -rf /tmp/wheels /tmp/constraints.txt
 
+# torchsparse reads the GPU's compute capability at import (backends.init), so it cannot be imported
+# without a GPU: not in this build, in CI, or on a --cpu boot. With no CUDA device, fall back to sm_86
+# (the build target); with one, the real capability is used as before.
 # Guard: the torchsparse backend must carry its CUDA kernels (a CPU-only build imports fine and only
-# fails at inference). pybind stores each bound name as a string in the .so.
-RUN so="$(python -c 'import importlib.util as u; print(u.find_spec("torchsparse.backend").origin)')" && \
-    grep -q build_kernel_map_subm_hashmap "$so" && echo "torchsparse CUDA backend OK: $so"
+# fails at inference). pybind stores each bound name as a string in the .so. find_spec on the top-level
+# package locates it without running its __init__.
+RUN ts="$(python -c 'import importlib.util as u, os; print(os.path.dirname(u.find_spec("torchsparse").origin))')" && \
+    sed -i 's/^    device_capability = torch.cuda.get_device_capability()$/    device_capability = torch.cuda.get_device_capability() if torch.cuda.is_available() else (8, 6)  # comfyui-docker: importable without a GPU/' \
+        "$ts/backends.py" && \
+    grep -q "comfyui-docker: importable without a GPU" "$ts/backends.py" && \
+    grep -q build_kernel_map_subm_hashmap "$ts"/backend*.so && echo "torchsparse CUDA backend OK:" "$ts"/backend*.so
 
 # Upstream has no installable package (no direct3d_s2/__init__.py), so put the pinned checkout on
 # sys.path with a .pth file. Drop the eager remesh import (fill_hole -> utils3d/nvdiffrast,

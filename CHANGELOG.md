@@ -10,7 +10,10 @@
   weights mounted). `ImageToMesh` gains upstream's sampler settings, `mc_threshold`,
   `remove_interior`, a run-scoped `deterministic` toggle and `unload_after` (default on: the
   pipeline lives in CPU RAM and only holds VRAM during a run). All are recorded in the sidecar. An
-  example API workflow ships in `workflows/`.
+  example API workflow ships in `workflows/`. torchsparse reads the GPU at import, so the image
+  patches it to fall back to sm_86 when no CUDA device is present (build, CI, `--cpu` boot).
+  **Upgrading:** the pack is seeded only when absent, so delete `custom_nodes/ComfyUI-Direct3D-S2`
+  before restarting on the new image.
 - Add a **`-3d`** image (`--target mesh3d`; `latest-3d`, `YY.MM.DD-3d`, …) with
   [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`
   (no sage, `USE_SAGE_ATTENTION=0`). flash-attn 2.8.3.post1 and `udf_ext` are compiled for sm_86
