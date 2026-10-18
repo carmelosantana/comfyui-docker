@@ -319,12 +319,13 @@ not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
 - **VRAM:** `sdf_resolution` 512 needs ~10 GB; a 1024 run peaked near 21 GB in the sandboxed
   reference run on the 3090. Inside ComfyUI (torch 2.9 / cuDNN 9) the same job with every model on the
   GPU hit 22 GiB allocated and ran out of memory in the 512-stage refiner, so `ImageToMesh` keeps only
-  the running stage's models on the GPU (its VAE, DiT, DINOv2 encoder and refiner; upstream holds
-  two DINOv2 ViT-L copies and all three stages at once). The loader keeps the pipeline in CPU RAM. `ImageToMesh` evicts
+  what is running on the GPU: the stage's VAE, DiT and DINOv2 encoder while it samples, and the
+  refiner alone while it refines (upstream holds two DINOv2 ViT-L copies and all three stages at
+  once). Models move over PCIe between stages, a few seconds per job. The loader keeps the pipeline in CPU RAM. `ImageToMesh` evicts
   ComfyUI's cached models, moves the pipeline to the GPU for the run, and with `unload_after`
   (default on) moves it back and frees the VRAM, also when the run fails. With `unload_after` off
-  the pipeline keeps ~20 GB that ComfyUI's own model manager cannot evict, so other workflows may
-  run out of VRAM until the next Direct3D-S2 run unloads it.
+  the last stage's models (a few GB) stay on the GPU, where ComfyUI's own model manager cannot
+  evict them, until the next Direct3D-S2 run unloads them.
 - **Sampler settings** (optional inputs, upstream defaults): `dense_steps`/`dense_guidance` (50 /
   7.0), `sparse_512_steps`/`sparse_512_guidance` (30 / 7.0), `sparse_1024_steps`/`sparse_1024_guidance`
   (15 / 7.0), `mc_threshold` (0.2), `remove_interior` (true; upstream applies it to the 1024 stage).
