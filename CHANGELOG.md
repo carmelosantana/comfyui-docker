@@ -2,10 +2,22 @@
 
 ## Unreleased
 
-- Add an **experimental** (not deployed) **`-3d`** image (`--target mesh3d`; `latest-3d`, `YY.MM.DD-3d`, …) with
+- Fix Direct3D-S2 in the **`-3d`** image failing to load its weights ("Missing key(s) …conv.weight;
+  Unexpected key(s) …conv.kernel"). The published checkpoints were saved with the torchsparse
+  backend, and the nodes forced spconv. torchsparse (MIT, `385f5ce`) is now built in `d3d-build`
+  with `FORCE_CUDA=1` and libsparsehash, a build guard fails if its CUDA kernels are missing, and
+  spconv is removed. A checkpoint-compat test strict-loads every v1.1 checkpoint (run it with the
+  weights mounted). `ImageToMesh` gains upstream's sampler settings, `mc_threshold`,
+  `remove_interior`, a run-scoped `deterministic` toggle and `unload_after` (default on: the
+  pipeline lives in CPU RAM and only holds VRAM during a run). All are recorded in the sidecar. An
+  example API workflow ships in `workflows/`. torchsparse reads the GPU at import, so the image
+  patches it to fall back to sm_86 when no CUDA device is present (build, CI, `--cpu` boot).
+  **Upgrading:** the pack is seeded only when absent, so delete `custom_nodes/ComfyUI-Direct3D-S2`
+  before restarting on the new image.
+- Add a **`-3d`** image (`--target mesh3d`; `latest-3d`, `YY.MM.DD-3d`, …) with
   [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`
   (no sage, `USE_SAGE_ATTENTION=0`). flash-attn 2.8.3.post1 and `udf_ext` are compiled for sm_86
-  against the image's torch. spconv comes from its prebuilt wheel. Base packages are held
+  against the image's torch (see the torchsparse fix above). Base packages are held
   by constraints. A new `3d` seeding category (`SEED_3D_NODES`) seeds this repo's own
   `nodes/ComfyUI-Direct3D-S2` pack. DINOv2 and BiRefNet remote code and the weights revision are
   pinned, and each saved mesh gets a provenance sidecar. Upstream's `remesh` step is cut out

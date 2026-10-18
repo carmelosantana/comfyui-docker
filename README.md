@@ -282,25 +282,30 @@ prebuilt wheels.
 
 ## Direct3D-S2 (`-3d` tags)
 
-> **Experimental — not for deployment.** Production Direct3D-S2 runs stay in the separate sandboxed
-> (`--network=none`) script. This image is not run on the shared GPU host, and its outputs are not
-> used for shipped work.
+> Image-to-mesh jobs go through the ComfyUI API: POST the [example workflow](#example-api-workflow)
+> to `/prompt`. The shared box is one RTX 3090. Check `/queue` and `/system_stats` before a run, and
+> never pre-empt another job.
 
 The `-3d` image (`docker build --target mesh3d .`) is `base` plus
 [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`,
 not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
 
 - **Why a separate image:** Direct3D-S2 needs flash-attn and a small CUDA extension (`udf_ext`). They are compiled in a devel stage against the image's own torch 2.9.1 / CUDA 13.0
-  for the 3090 (sm_86). The sparse-conv backend is spconv (prebuilt wheel), not torchsparse. Every
+  for the 3090 (sm_86). The sparse-conv backend is torchsparse, built from a pinned commit with
+  `FORCE_CUDA=1` (there is no GPU during `docker build`; without it setup.py silently builds a
+  CPU-only backend). The published checkpoints were saved with torchsparse: under spconv the sparse
+  VAE/DiT weights fail to load (`conv.kernel` vs `conv.weight`). The nodes force
+  `SPARSE_BACKEND=torchsparse`, and a build guard fails if the backend lacks its CUDA kernels. Every
   package already in `base` is held at its version while the 3D deps install, so they cannot move
   torch or anything the other packs use. `latest` and `latest-sage` are unchanged.
 - **Nodes:** `Direct3DS2ModelLoader` → `Direct3DS2ImageToMesh` → `Direct3DS2SaveMesh`. A small pack
   that lives in this repo ([`nodes/ComfyUI-Direct3D-S2`](nodes/ComfyUI-Direct3D-S2)). It does not
   use a third-party wrapper. Upstream code is pinned to `a1cf235`.
 - **Inputs:** wire `LoadImage`'s `IMAGE` *and* `MASK` to pass an RGBA image. The pipeline then
-  skips background removal. Without a mask it runs BiRefNet.
+  skips background removal. Without a mask it runs BiRefNet, and so it does when the image has no
+  alpha channel (LoadImage's 64x64 placeholder mask) or an alpha that is fully opaque.
 - **Licences:** only permissive code ships. Direct3D-S2 code and weights are MIT, flash-attn is
-  BSD-3, and spconv/cumm are Apache-2.0. The image encoder is DINOv2 (Apache-2.0) and background
+  BSD-3, and torchsparse is MIT (its unused `rootpath` import is dropped, so that package does not ship). The image encoder is DINOv2 (Apache-2.0) and background
   removal is BiRefNet (MIT). Both run remote code on first use, so both are pinned to fixed commits.
   Do not swap in DINOv3 or RMBG (non-commercial). Upstream's optional `remesh` step is removed. It
   needs nvdiffrast (research-only) and pymeshfix/igraph (GPL), so none of those are installed, and
@@ -311,12 +316,47 @@ not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
 - **Weights:** `wushuang98/Direct3D-S2` (~4.2 GB for one version), DINOv2 ViT-L/14-reg (~1.2 GB),
   and BiRefNet if used. They download on the first loader run into `HF_HOME`/`TORCH_HOME` on the
   `models` mount. Nothing is baked.
-- **VRAM:** `sdf_resolution` 512 needs ~10 GB, 1024 ~24 GB (a 3090 just fits).
+- **VRAM:** `sdf_resolution` 512 needs ~10 GB; a 1024 run peaked near 21 GB in the sandboxed
+  reference run on the 3090. The loader keeps the pipeline in CPU RAM. `ImageToMesh` evicts
+  ComfyUI's cached models, moves the pipeline to the GPU for the run, and with `unload_after`
+  (default on) moves it back and frees the VRAM, also when the run fails. With `unload_after` off
+  the pipeline keeps ~20 GB that ComfyUI's own model manager cannot evict, so other workflows may
+  run out of VRAM until the next Direct3D-S2 run unloads it.
+- **Sampler settings** (optional inputs, upstream defaults): `dense_steps`/`dense_guidance` (50 /
+  7.0), `sparse_512_steps`/`sparse_512_guidance` (30 / 7.0), `sparse_1024_steps`/`sparse_1024_guidance`
+  (15 / 7.0), `mc_threshold` (0.2), `remove_interior` (true; upstream applies it to the 1024 stage).
+- **`deterministic`** (default off): turns on `torch.use_deterministic_algorithms` (warn-only),
+  `cudnn.deterministic` and sets `cudnn.benchmark` off for that run only, then restores
+  ComfyUI's settings. Custom CUDA kernels (torchsparse, flash-attn) are outside its reach, so it
+  reduces run-to-run drift but does not promise identical meshes: compare the hashes of a
+  same-seed re-run to find out.
 - **Provenance:** each saved mesh gets a `<file>.json` sidecar. It records the seed, resolution,
   weights version and sha256 of every weight file. It also holds the input's pixel sha256 (hash of
-  the exact RGBA pixels passed in, not the source file) and the mesh's own sha256.
+  the exact RGBA pixels passed in, not the source file), the sampler settings, the `deterministic`
+  flag, the sparse backend and the mesh's own sha256.
 - **Verified:** CI builds the image, runs the pack's unit tests, boots `--cpu` and checks the
-  three nodes register. A real GPU render has not been run in CI.
+  three nodes register. The checkpoint-compat test (`tests/test_direct3d_s2_nodes.py`) strict-loads
+  every v1.1 checkpoint into its model under torchsparse when the weights are mounted
+  (`D3DS2_WEIGHTS`; see the file's docstring); CI has no weights, so it skips it there. GPU renders
+  are not run in CI.
+
+### Example API workflow
+
+[`workflows/direct3d-s2-image-to-mesh.api.json`](workflows/direct3d-s2-image-to-mesh.api.json) is
+in ComfyUI's API format: `LoadImage` (an RGBA PNG in ComfyUI's `input` folder, its `MASK` wired to
+`mask` so BiRefNet is skipped) → `Direct3DS2ModelLoader` (v1.1) → `Direct3DS2ImageToMesh` (1024,
+seed 6400, every setting at its default) → `Direct3DS2SaveMesh` (GLB plus `.json` sidecar). Set the
+image name and output prefix, then queue it:
+
+```bash
+jq '{prompt: (.["1"].inputs.image = "my-rgba.png" | .["4"].inputs.filename_prefix = "3d/my-mesh")}' \
+  workflows/direct3d-s2-image-to-mesh.api.json | curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data @- http://comfyui:8188/prompt
+```
+
+The shipped `example-rgba.png` name is a placeholder, so set `image` before posting. The first run
+downloads the weights (see above). A 1024 run took about 135 s in the sandboxed reference run on
+the 3090.
 
 ## Publishing (maintainer note)
 

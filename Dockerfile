@@ -251,7 +251,7 @@ ENV USE_SAGE_ATTENTION=1
 # ---------------------------------------------------------------------------
 # d3d-build — compile Direct3D-S2's CUDA pieces in the devel twin, against the image's own torch
 # (no flash-attn wheel exists for torch 2.9). No GPU needed: everything cross-compiles for the
-# 3090. flash-attn's sm_80 kernels run on sm_86, so only sm_80 is built.
+# 3090. flash-attn's sm_80 kernels run on sm_86, so only sm_80 is built. torchsparse builds for sm_86.
 # ---------------------------------------------------------------------------
 FROM pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-devel AS d3d-build
 
@@ -280,6 +280,24 @@ RUN git clone https://github.com/DreamTechAI/Direct3D-S2.git /src/Direct3D-S2 &&
     git -C /src/Direct3D-S2 checkout "${DIRECT3D_S2_REF}" && \
     pip wheel --no-cache-dir --no-build-isolation --no-deps /src/Direct3D-S2/third_party/voxelize -w /wheels
 
+# torchsparse (MIT), the sparse conv backend the published checkpoints were saved with (their keys
+# are "conv.kernel"; spconv's are "conv.weight"). No release wheel exists for torch 2.9 / CUDA 13, so
+# build the pinned commit (2025-02-24). There is no GPU during `docker build`: without FORCE_CUDA=1
+# setup.py silently builds a CPU-only backend and inference fails later. Its unused `import rootpath`
+# and the rootpath/backports.cached_property requirements are dropped (neither is used on Python 3.11),
+# so they and the test tooling rootpath pulls in never ship; the wheel installs with --no-deps in mesh3d. libsparsehash-dev (BSD, headers only) stays in this stage.
+ARG TORCHSPARSE_REF=385f5ce8718fcae93540511b7f5832f4e71fd835
+RUN apt-get update --assume-yes && \
+    apt-get install --assume-yes --no-install-recommends libsparsehash-dev && \
+    rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/mit-han-lab/torchsparse.git /src/torchsparse && \
+    git -C /src/torchsparse checkout "${TORCHSPARSE_REF}" && \
+    sed -i '/^import rootpath$/d' /src/torchsparse/torchsparse/nn/functional/conv/utils/collections.py \
+        /src/torchsparse/torchsparse/nn/functional/conv/utils/compat.py && \
+    sed -i '/"backports.cached_property",/d; /"rootpath",/d' /src/torchsparse/setup.py && \
+    ! grep -rn rootpath /src/torchsparse/torchsparse /src/torchsparse/setup.py && \
+    FORCE_CUDA=1 pip wheel --no-cache-dir --no-build-isolation --no-deps /src/torchsparse -w /wheels
+
 # ---------------------------------------------------------------------------
 # mesh3d — base + Direct3D-S2 (published as the -3d tags). Built from base, not sage, and runs
 # with sage attention off. Every package already in base is held at its version (constraints),
@@ -295,11 +313,24 @@ ARG DIRECT3D_S2_REF=a1cf235b2881cff04a91900060a9546b40e7ee5d
 # import guard below fails the build if base ever stops providing them.
 COPY --from=d3d-build /wheels/*.whl /tmp/wheels/
 RUN pip list --format=freeze > /tmp/constraints.txt && \
+    pip install --no-cache-dir --no-deps /tmp/wheels/torchsparse-*.whl && \
+    rm /tmp/wheels/torchsparse-*.whl && \
     pip install --no-cache-dir --constraint /tmp/constraints.txt \
         /tmp/wheels/*.whl \
-        "spconv-cu126==2.3.8" \
         "trimesh==5.1.1" && \
     rm -rf /tmp/wheels /tmp/constraints.txt
+
+# torchsparse reads the GPU's compute capability at import (backends.init), so it cannot be imported
+# without a GPU: not in this build, in CI, or on a --cpu boot. With no CUDA device, fall back to sm_86
+# (the build target); with one, the real capability is used as before.
+# Guard: the torchsparse backend must carry its CUDA kernels (a CPU-only build imports fine and only
+# fails at inference). pybind stores each bound name as a string in the .so. find_spec on the top-level
+# package locates it without running its __init__.
+RUN ts="$(python -c 'import importlib.util as u, os; print(os.path.dirname(u.find_spec("torchsparse").origin))')" && \
+    sed -i 's/^    device_capability = torch.cuda.get_device_capability()$/    device_capability = torch.cuda.get_device_capability() if torch.cuda.is_available() else (8, 6)  # comfyui-docker: importable without a GPU/' \
+        "$ts/backends.py" && \
+    grep -q "comfyui-docker: importable without a GPU" "$ts/backends.py" && \
+    grep -q build_kernel_map_subm_hashmap "$ts"/backend*.so && echo "torchsparse CUDA backend OK:" "$ts"/backend*.so
 
 # Upstream has no installable package (no direct3d_s2/__init__.py), so put the pinned checkout on
 # sys.path with a .pth file. Drop the eager remesh import (fill_hole -> utils3d/nvdiffrast,
@@ -312,11 +343,11 @@ RUN git clone https://github.com/DreamTechAI/Direct3D-S2.git /opt/direct3d-s2 &&
 
 COPY nodes/ComfyUI-Direct3D-S2 /opt/comfyui-baked-nodes/ComfyUI-Direct3D-S2
 
-# Guards: the Direct3D-S2 import chain resolves without a GPU on the spconv backend; no blocked
+# Guards: the Direct3D-S2 import chain resolves without a GPU on the torchsparse backend; no blocked
 # package is installed; every upstream torch.load stays weights_only=True (the .ckpt files are pickles).
-RUN SPARSE_BACKEND=spconv python -c "import flash_attn, udf_ext, spconv.pytorch, \
+RUN SPARSE_BACKEND=torchsparse python -c "import flash_attn, udf_ext, torchsparse, \
     direct3d_s2.pipeline, torch; print('direct3d-s2 OK on torch', torch.__version__, \
-    'flash-attn', flash_attn.__version__)" && \
+    'flash-attn', flash_attn.__version__, 'torchsparse', torchsparse.__version__)" && \
     ! pip list --format=freeze | grep -iE '^(nvdiffrast|pymeshfix|igraph|python-igraph|utils3d)==' && \
     ! grep -rn "torch.load(" /opt/direct3d-s2/direct3d_s2 | grep -v "weights_only=True"
 

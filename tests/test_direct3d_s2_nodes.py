@@ -3,6 +3,11 @@
 Run inside the -3d image (it has torch, PIL and ComfyUI's folder_paths):
   docker run --rm --entrypoint python -v "$PWD:/repo:ro" -w /opt/comfyui comfyui-docker:3d \
       /repo/tests/test_direct3d_s2_nodes.py
+
+The checkpoint-compat test also needs the v1.1 weights (~4.2 GB, not baked). Mount a directory
+holding config.yaml and the five .ckpt files and point D3DS2_WEIGHTS at it:
+  docker run --rm --entrypoint python -v "$PWD:/repo:ro" -v /path/to/direct3d-s2-v-1-1:/w:ro \
+      -e D3DS2_WEIGHTS=/w -w /opt/comfyui comfyui-docker:3d /repo/tests/test_direct3d_s2_nodes.py
 """
 
 import hashlib
@@ -28,6 +33,40 @@ spec.loader.exec_module(pack)
 nodes = sys.modules["d3ds2_pack.nodes"]
 
 
+REPO = os.path.join(os.path.dirname(__file__), "..")
+EXAMPLE_WORKFLOW = os.path.join(REPO, "workflows", "direct3d-s2-image-to-mesh.api.json")
+
+
+class FakeModelManagement(types.SimpleNamespace):
+    """Stands in for comfy.model_management, which needs a GPU driver to import."""
+
+    def __init__(self):
+        super().__init__(calls=[])
+
+    def get_torch_device(self):
+        return "cpu"
+
+    def unload_all_models(self):
+        self.calls.append("unload_all_models")
+
+    def soft_empty_cache(self):
+        self.calls.append("soft_empty_cache")
+
+
+def cutout_mask():
+    """A LoadImage MASK with a transparent corner (1 = transparent), as from a background-removed PNG."""
+    mask = torch.zeros(1, 4, 6)
+    mask[0, 0, 0] = 1.0
+    return mask
+
+
+class FakeRembg:
+    def __init__(self):
+        self.device = "cpu"
+        self.birefnet_model = types.SimpleNamespace(moves=[])
+        self.birefnet_model.to = lambda device: self.birefnet_model.moves.append(str(device))
+
+
 class FakeMesh:
     def __init__(self):
         self.metadata = {}
@@ -40,11 +79,37 @@ class FakeMesh:
 class FakePipeline:
     def __init__(self):
         self.calls = []
+        self.moves = []
+        self.seen_determinism = None
         self.provenance = {"weights": {"model_dense.ckpt": "abc"}}
+
+    def to(self, device):
+        self.moves.append(str(device))
+        self.device = device
 
     def __call__(self, image, **kwargs):
         self.calls.append((image, kwargs))
+        self.seen_determinism = (torch.are_deterministic_algorithms_enabled(),
+                                 torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark)
         return {"mesh": FakeMesh()}
+
+
+class FakeMMTestCase(unittest.TestCase):
+    def setUp(self):
+        self.mm = FakeModelManagement()
+        self._saved_mm = sys.modules.get("comfy.model_management")
+        sys.modules["comfy.model_management"] = self.mm
+
+    def tearDown(self):
+        if self._saved_mm is None:
+            sys.modules.pop("comfy.model_management", None)
+        else:
+            sys.modules["comfy.model_management"] = self._saved_mm
+
+    def generate(self, pipe, **kwargs):
+        args = {"image": torch.ones(1, 4, 6, 3), "sdf_resolution": "512", "seed": 7, "mask": cutout_mask()}
+        args.update(kwargs)
+        return nodes.Direct3DS2ImageToMesh().generate(pipe, **args)
 
 
 class MappingTests(unittest.TestCase):
@@ -70,12 +135,72 @@ class ToPilTests(unittest.TestCase):
         self.assertEqual(img.getpixel((0, 0))[3], 0)
         self.assertEqual(img.getpixel((1, 0))[3], 255)
 
+    def test_loadimage_placeholder_mask_means_no_alpha(self):
+        # LoadImage returns a 64x64 zero mask for an image without an alpha channel.
+        img = nodes.to_pil(torch.ones(1, 4, 6, 3), torch.zeros(1, 64, 64))
+        self.assertEqual(img.mode, "RGB")
 
-class ImageToMeshTests(unittest.TestCase):
+    def test_fully_opaque_mask_means_no_alpha(self):
+        # Nothing was cut out, so the background still needs removing (BiRefNet).
+        img = nodes.to_pil(torch.ones(1, 4, 6, 3), torch.zeros(1, 4, 6))
+        self.assertEqual(img.mode, "RGB")
+
+
+class BackendTests(unittest.TestCase):
+    def test_forces_torchsparse_backend(self):
+        # The published checkpoints were saved with torchsparse; spconv names the weights differently.
+        self.assertEqual(os.environ.get("SPARSE_BACKEND"), "torchsparse")
+
+    def test_sparse_conv_uses_checkpoint_key_layout(self):
+        from direct3d_s2.modules import sparse as sp
+
+        self.assertEqual(sp.BACKEND, "torchsparse")
+        conv = sp.SparseConv3d(4, 8, 3)
+        # Checkpoints carry e.g. "encoder.downsample.0.out_layers.0.conv.kernel".
+        self.assertEqual(set(conv.state_dict()), {"conv.kernel", "conv.bias"})
+        self.assertEqual(tuple(conv.conv.kernel.shape), (27, 4, 8))
+
+
+# config.yaml section -> (checkpoint file, key inside it), as upstream's from_pretrained loads them.
+CHECKPOINT_PARTS = {
+    "dense_vae": ("model_dense.ckpt", "vae"),
+    "dense_dit": ("model_dense.ckpt", "dit"),
+    "sparse_vae_512": ("model_sparse_512.ckpt", "vae"),
+    "sparse_dit_512": ("model_sparse_512.ckpt", "dit"),
+    "sparse_vae_1024": ("model_sparse_1024.ckpt", "vae"),
+    "sparse_dit_1024": ("model_sparse_1024.ckpt", "dit"),
+    "refiner": ("model_refiner.ckpt", "refiner"),
+    "refiner_1024": ("model_refiner_1024.ckpt", "refiner"),
+}
+
+
+@unittest.skipUnless(os.environ.get("D3DS2_WEIGHTS"), "set D3DS2_WEIGHTS to a direct3d-s2-v-1-1 weights dir")
+class CheckpointCompatTests(unittest.TestCase):
+    def test_every_checkpoint_loads_strictly_under_the_chosen_backend(self):
+        from direct3d_s2.utils import instantiate_from_config
+        from omegaconf import OmegaConf
+
+        weights = os.environ["D3DS2_WEIGHTS"]
+        cfg = OmegaConf.load(os.path.join(weights, "config.yaml"))
+        by_file = {}
+        for part, (filename, key) in CHECKPOINT_PARTS.items():
+            by_file.setdefault(filename, []).append((part, key))
+        for filename, parts in by_file.items():
+            state = torch.load(os.path.join(weights, filename), map_location="cpu", weights_only=True)
+            for part, key in parts:
+                with self.subTest(part=part):
+                    model = instantiate_from_config(cfg[part])
+                    # Raises on any missing/unexpected key or shape mismatch.
+                    model.load_state_dict(state[key], strict=True)
+                    del model
+            del state
+
+
+class ImageToMeshTests(FakeMMTestCase):
     def test_passes_settings_and_seeded_generator(self):
         pipe = FakePipeline()
         pipe.birefnet_model = object()  # skip loading the real BiRefNet
-        (mesh,) = nodes.Direct3DS2ImageToMesh().generate(pipe, torch.ones(1, 4, 6, 3), "512", 7, mask=None)
+        (mesh,) = self.generate(pipe, mask=None)
         self.assertIsInstance(mesh, FakeMesh)
         image, kwargs = pipe.calls[0]
         self.assertIsInstance(image, Image.Image)
@@ -87,8 +212,7 @@ class ImageToMeshTests(unittest.TestCase):
 
     def test_records_provenance_on_mesh(self):
         pipe = FakePipeline()
-        mask = torch.zeros(1, 4, 6)
-        (mesh,) = nodes.Direct3DS2ImageToMesh().generate(pipe, torch.ones(1, 4, 6, 3), "1024", 42, mask=mask)
+        (mesh,) = self.generate(pipe, sdf_resolution="1024", seed=42)
         prov = mesh.metadata["direct3d_s2"]
         image = pipe.calls[0][0]
         self.assertEqual((prov["seed"], prov["sdf_resolution"]), (42, 1024))
@@ -96,6 +220,104 @@ class ImageToMeshTests(unittest.TestCase):
         self.assertEqual(prov["input"]["mode"], "RGBA")
         self.assertEqual(prov["input"]["pixel_sha256"], hashlib.sha256(image.tobytes()).hexdigest())
         self.assertEqual(prov["background_removal"], "none (RGBA input)")
+
+    def test_sampler_settings_default_to_upstream(self):
+        pipe = FakePipeline()
+        (mesh,) = self.generate(pipe)
+        kwargs = pipe.calls[0][1]
+        self.assertEqual(kwargs["dense_sampler_params"], {"num_inference_steps": 50, "guidance_scale": 7.0})
+        self.assertEqual(kwargs["sparse_512_sampler_params"], {"num_inference_steps": 30, "guidance_scale": 7.0})
+        self.assertEqual(kwargs["sparse_1024_sampler_params"], {"num_inference_steps": 15, "guidance_scale": 7.0})
+        self.assertEqual((kwargs["mc_threshold"], kwargs["remove_interior"]), (0.2, True))
+        prov = mesh.metadata["direct3d_s2"]
+        self.assertEqual(prov["sampler"], {
+            "dense": {"steps": 50, "guidance": 7.0},
+            "sparse_512": {"steps": 30, "guidance": 7.0},
+            "sparse_1024": {"steps": 15, "guidance": 7.0},
+            "mc_threshold": 0.2,
+            "remove_interior": True,
+        })
+        self.assertFalse(prov["deterministic"])
+        self.assertEqual(prov["sparse_backend"], "torchsparse")
+
+    def test_sampler_settings_pass_through(self):
+        pipe = FakePipeline()
+        (mesh,) = self.generate(pipe, dense_steps=20, dense_guidance=5.0, sparse_512_steps=10,
+                                sparse_512_guidance=4.0, sparse_1024_steps=8, sparse_1024_guidance=3.0,
+                                mc_threshold=0.1, remove_interior=False)
+        kwargs = pipe.calls[0][1]
+        self.assertEqual(kwargs["dense_sampler_params"], {"num_inference_steps": 20, "guidance_scale": 5.0})
+        self.assertEqual(kwargs["sparse_512_sampler_params"], {"num_inference_steps": 10, "guidance_scale": 4.0})
+        self.assertEqual(kwargs["sparse_1024_sampler_params"], {"num_inference_steps": 8, "guidance_scale": 3.0})
+        self.assertEqual((kwargs["mc_threshold"], kwargs["remove_interior"]), (0.1, False))
+        self.assertEqual(mesh.metadata["direct3d_s2"]["sampler"]["sparse_1024"], {"steps": 8, "guidance": 3.0})
+
+    def test_input_types_expose_sampler_settings_with_upstream_defaults(self):
+        optional = nodes.Direct3DS2ImageToMesh.INPUT_TYPES()["optional"]
+        defaults = {name: spec[1]["default"] for name, spec in optional.items() if len(spec) > 1}
+        self.assertEqual(defaults, {
+            "dense_steps": 50, "dense_guidance": 7.0, "sparse_512_steps": 30, "sparse_512_guidance": 7.0,
+            "sparse_1024_steps": 15, "sparse_1024_guidance": 7.0, "mc_threshold": 0.2,
+            "remove_interior": True, "deterministic": False, "unload_after": True,
+        })
+
+    def test_deterministic_toggle_is_scoped_to_the_run(self):
+        before = (torch.are_deterministic_algorithms_enabled(),
+                  torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark)
+        pipe = FakePipeline()
+        (mesh,) = self.generate(pipe, deterministic=True)
+        self.assertEqual(pipe.seen_determinism, (True, True, False))
+        self.assertTrue(mesh.metadata["direct3d_s2"]["deterministic"])
+        after = (torch.are_deterministic_algorithms_enabled(),
+                 torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark)
+        self.assertEqual(after, before)
+
+    def test_moves_to_device_then_unloads_by_default(self):
+        pipe = FakePipeline()
+        self.generate(pipe)
+        self.assertEqual(pipe.moves, ["cpu", "cpu"])  # to the torch device (cpu here), then offloaded
+        self.assertIn("unload_all_models", self.mm.calls)
+        self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
+
+    def test_unload_after_false_keeps_pipeline_on_device(self):
+        pipe = FakePipeline()
+        self.generate(pipe, unload_after=False)
+        self.assertEqual(pipe.moves, ["cpu"])  # moved to the torch device once, never offloaded
+        self.assertNotIn("soft_empty_cache", self.mm.calls)
+
+    def test_birefnet_follows_the_pipeline_on_and_off_the_gpu(self):
+        pipe = FakePipeline()
+        rembg = FakeRembg()
+        pipe.birefnet_model = rembg
+        (mesh,) = self.generate(pipe, mask=None)
+        self.assertEqual(rembg.birefnet_model.moves, ["cpu", "cpu"])
+        self.assertEqual(rembg.device, "cpu")
+        self.assertEqual(mesh.metadata["direct3d_s2"]["background_removal"],
+                         f"{nodes.BIREFNET_REPO}@{nodes.BIREFNET_REF}")
+
+    def test_unloads_when_the_move_to_the_gpu_fails(self):
+        class OomOnFirstMove(FakePipeline):
+            def to(self, device):
+                super().to(device)
+                if len(self.moves) == 1:
+                    raise RuntimeError("CUDA out of memory")
+
+        pipe = OomOnFirstMove()
+        with self.assertRaisesRegex(RuntimeError, "out of memory"):
+            self.generate(pipe)
+        self.assertEqual(pipe.moves, ["cpu", "cpu"])
+        self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
+
+    def test_unloads_even_when_the_pipeline_fails(self):
+        class Boom(FakePipeline):
+            def __call__(self, image, **kwargs):
+                raise RuntimeError("CUDA out of memory")
+
+        pipe = Boom()
+        with self.assertRaisesRegex(RuntimeError, "out of memory"):
+            self.generate(pipe)
+        self.assertEqual(pipe.moves, ["cpu", "cpu"])
+        self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
 
 
 class LoaderTests(unittest.TestCase):
@@ -120,7 +342,6 @@ class LoaderTests(unittest.TestCase):
                 def to(self, device):
                     pass
 
-            FakePipeline.to = lambda self, device: None
             fakes = {
                 "direct3d_s2.pipeline": types.SimpleNamespace(Direct3DS2Pipeline=FakeD3D),
                 "comfy.model_management": types.SimpleNamespace(get_torch_device=lambda: "cpu"),
@@ -147,6 +368,35 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(prov["weights_revision"], nodes.WEIGHTS_REF)
         self.assertEqual(prov["weights"]["config.yaml"], hashlib.sha256(b"config.yaml").hexdigest())
         self.assertEqual(set(prov["weights"]), set(nodes.WEIGHT_FILES))
+        self.assertEqual(pipe.moves, ["cpu"])  # VRAM is only taken while a mesh is generated
+
+
+class ExampleWorkflowTests(unittest.TestCase):
+    def test_example_api_workflow_wires_rgba_loadimage_to_glb(self):
+        with open(EXAMPLE_WORKFLOW) as f:
+            prompt = json.load(f)
+        by_class = {node["class_type"]: (node_id, node["inputs"]) for node_id, node in prompt.items()}
+        self.assertEqual(set(by_class), {"LoadImage", "Direct3DS2ModelLoader", "Direct3DS2ImageToMesh",
+                                         "Direct3DS2SaveMesh"})
+        load_id, _ = by_class["LoadImage"]
+        loader_id, loader = by_class["Direct3DS2ModelLoader"]
+        mesh_id, mesh = by_class["Direct3DS2ImageToMesh"]
+        _, save = by_class["Direct3DS2SaveMesh"]
+        self.assertEqual(loader["version"], "direct3d-s2-v-1-1")
+        self.assertEqual(mesh["image"], [load_id, 0])
+        self.assertEqual(mesh["mask"], [load_id, 1])  # the RGBA alpha: BiRefNet is skipped
+        self.assertEqual(mesh["pipeline"], [loader_id, 0])
+        self.assertEqual(mesh["sdf_resolution"], "1024")
+        self.assertEqual(save["mesh"], [mesh_id, 0])
+        self.assertEqual(save["format"], "glb")
+        for class_type, (_, inputs) in by_class.items():
+            if class_type not in pack.NODE_CLASS_MAPPINGS:
+                continue
+            types_ = pack.NODE_CLASS_MAPPINGS[class_type].INPUT_TYPES()
+            known = set(types_["required"]) | set(types_.get("optional", {}))
+            with self.subTest(node=class_type):
+                self.assertLessEqual(set(inputs), known)
+                self.assertLessEqual(set(types_["required"]), set(inputs))
 
 
 class PinTests(unittest.TestCase):
