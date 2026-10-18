@@ -278,14 +278,14 @@ class ImageToMeshTests(FakeMMTestCase):
     def test_moves_to_device_then_unloads_by_default(self):
         pipe = FakePipeline()
         self.generate(pipe)
-        self.assertEqual(pipe.moves, ["cpu", "cpu"])  # to the torch device (cpu here), then offloaded
+        self.assertEqual(pipe.moves, ["cpu"])  # staged() places each stage; only the final offload moves all
         self.assertIn("unload_all_models", self.mm.calls)
         self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
 
     def test_unload_after_false_keeps_pipeline_on_device(self):
         pipe = FakePipeline()
         self.generate(pipe, unload_after=False)
-        self.assertEqual(pipe.moves, ["cpu"])  # moved to the torch device once, never offloaded
+        self.assertEqual(pipe.moves, [])  # never offloaded
         self.assertNotIn("soft_empty_cache", self.mm.calls)
 
     def test_birefnet_follows_the_pipeline_on_and_off_the_gpu(self):
@@ -299,16 +299,18 @@ class ImageToMeshTests(FakeMMTestCase):
                          f"{nodes.BIREFNET_REPO}@{nodes.BIREFNET_REF}")
 
     def test_unloads_when_the_move_to_the_gpu_fails(self):
-        class OomOnFirstMove(FakePipeline):
-            def to(self, device):
-                super().to(device)
-                if len(self.moves) == 1:
-                    raise RuntimeError("CUDA out of memory")
+        pipe = FakePipeline()
+        pipe.birefnet_model = FakeRembg()
 
-        pipe = OomOnFirstMove()
+        def oom(device):
+            if str(device) != "cpu":
+                raise RuntimeError("CUDA out of memory")
+
+        pipe.birefnet_model.birefnet_model.to = oom
+        self.mm.get_torch_device = lambda: "meta"  # any non-CPU device; the move fails before it is used
         with self.assertRaisesRegex(RuntimeError, "out of memory"):
-            self.generate(pipe)
-        self.assertEqual(pipe.moves, ["cpu", "cpu"])
+            self.generate(pipe, mask=None)
+        self.assertEqual(pipe.moves, ["cpu"])
         self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
 
     def test_unloads_even_when_the_pipeline_fails(self):
@@ -319,7 +321,7 @@ class ImageToMeshTests(FakeMMTestCase):
         pipe = Boom()
         with self.assertRaisesRegex(RuntimeError, "out of memory"):
             self.generate(pipe)
-        self.assertEqual(pipe.moves, ["cpu", "cpu"])
+        self.assertEqual(pipe.moves, ["cpu"])
         self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
 
 
@@ -379,8 +381,19 @@ class FakeModule:
         self.name, self.log, self.device = name, log, "cpu"
 
     def to(self, device):
+        self.log.append(("to", self.name, str(device)))
         self.device = str(device)
         return self
+
+
+class FakeRefiner(FakeModule):
+    def __init__(self, name, log, pipeline):
+        super().__init__(name, log)
+        self.pipeline = pipeline
+
+    def run(self, *args, **kwargs):
+        self.log.append(("refine", self.name, self.pipeline.on("gpu")))
+        return [self.name]
 
 
 class FakeStagedPipeline:
@@ -389,15 +402,20 @@ class FakeStagedPipeline:
     def __init__(self):
         self.log = []
         for name in nodes.PIPELINE_MODULES:
-            setattr(self, name, FakeModule(name, self.log))
+            setattr(self, name, (FakeRefiner(name, self.log, self) if name.startswith("refiner")
+                                 else FakeModule(name, self.log)))
 
     def on(self, device):
         return sorted(name for name in nodes.PIPELINE_MODULES if getattr(self, name).device == device)
 
-    def inference(self, image, vae, dit, conditioner, scheduler, mode="dense", **kwargs):
+    def inference(self, image, vae, dit, conditioner, scheduler, mode="dense", remove_interior=False, **kwargs):
         self.log.append((mode, self.on("gpu")))
         if mode == "fail":
             raise RuntimeError("CUDA out of memory")
+        if mode == "sparse512":
+            return self.refiner.run()
+        if mode == "sparse1024" and remove_interior:
+            return self.refiner_1024.run()
         return [mode]
 
     def __call__(self, image, sdf_resolution=1024):
@@ -410,22 +428,53 @@ class FakeStagedPipeline:
 
 
 class StageOffloadTests(unittest.TestCase):
+    def stages(self, pipe):
+        return [entry for entry in pipe.log if entry[0] != "to"]
+
     def test_only_the_running_stage_is_on_the_gpu(self):
         pipe = FakeStagedPipeline()
         with nodes.staged(pipe, "gpu"):
             pipe("img")
-        self.assertEqual(pipe.log, [
+        self.assertEqual(self.stages(pipe), [
             ("dense", ["dense_dit", "dense_image_encoder", "dense_vae"]),
-            ("sparse512", ["refiner", "sparse_dit_512", "sparse_image_encoder", "sparse_vae_512"]),
-            ("sparse1024", ["refiner_1024", "sparse_dit_1024", "sparse_image_encoder", "sparse_vae_1024"]),
+            ("sparse512", ["sparse_dit_512", "sparse_image_encoder", "sparse_vae_512"]),
+            ("refine", "refiner", ["refiner"]),  # the peak: the refiner alone
+            ("sparse1024", ["sparse_dit_1024", "sparse_image_encoder", "sparse_vae_1024"]),
+            ("refine", "refiner_1024", ["refiner_1024"]),
         ])
 
-    def test_restores_upstream_inference_even_on_failure(self):
+    def test_moves_models_off_before_moving_the_stage_on(self):
+        pipe = FakeStagedPipeline()
+        for name in nodes.PIPELINE_MODULES:
+            getattr(pipe, name).device = "gpu"  # e.g. left over from an unload_after=False run
+        with nodes.staged(pipe, "gpu"):
+            pipe("img", sdf_resolution=512)
+        segment = []
+        for entry in pipe.log:
+            if entry[0] != "to":
+                targets = [device for _, _, device in segment]
+                self.assertEqual(targets, sorted(targets, key=lambda d: d != "cpu"), entry)
+                segment = []
+            else:
+                segment.append(entry)
+
+    def test_birefnet_leaves_the_gpu_once_the_image_is_prepared(self):
+        pipe = FakeStagedPipeline()
+        pipe.birefnet_model = FakeRembg()
+        pipe.birefnet_model.birefnet_model.moves.append("gpu")
+        with nodes.staged(pipe, "gpu"):
+            pipe("img", sdf_resolution=512)
+        self.assertEqual(pipe.birefnet_model.birefnet_model.moves[-1], "cpu")
+
+    def test_restores_upstream_methods_even_on_failure(self):
         pipe = FakeStagedPipeline()
         with self.assertRaises(RuntimeError):
             with nodes.staged(pipe, "gpu"):
                 pipe.inference("img", pipe.dense_vae, pipe.dense_dit, pipe.dense_image_encoder, None, mode="fail")
-        self.assertNotIn("inference", vars(pipe))  # the class method is back in charge
+        self.assertNotIn("inference", vars(pipe))  # the class methods are back in charge
+        self.assertNotIn("run", vars(pipe.refiner))
+        self.assertNotIn("run", vars(pipe.refiner_1024))
+
 
     def test_generate_runs_the_pipeline_staged(self):
         seen = {}
@@ -446,6 +495,28 @@ class StageOffloadTests(unittest.TestCase):
             else:
                 sys.modules["comfy.model_management"] = saved
         self.assertTrue(seen["staged"])
+
+
+class UpstreamShapeTests(unittest.TestCase):
+    """staged() relies on upstream's attribute names and call shapes; fail loudly if they change."""
+
+    def test_pipeline_modules_match_upstream(self):
+        import inspect
+        from direct3d_s2.pipeline import Direct3DS2Pipeline
+
+        params = list(inspect.signature(Direct3DS2Pipeline.__init__).parameters)
+        models = {p for p in params if p not in ("self", "dtype") and "scheduler" not in p}
+        self.assertEqual(set(nodes.PIPELINE_MODULES), models)
+
+    def test_inference_and_refiner_shapes(self):
+        import inspect
+        from direct3d_s2.models.refiner.unet_refiner import Voxel_RefinerXL, Voxel_RefinerXL_sign
+        from direct3d_s2.pipeline import Direct3DS2Pipeline
+
+        params = list(inspect.signature(Direct3DS2Pipeline.inference).parameters)
+        self.assertEqual(params[:6], ["self", "image", "vae", "dit", "conditioner", "scheduler"])
+        self.assertIn("mode", params)
+        self.assertTrue(callable(Voxel_RefinerXL.run) and callable(Voxel_RefinerXL_sign.run))
 
 
 class ExampleWorkflowTests(unittest.TestCase):
