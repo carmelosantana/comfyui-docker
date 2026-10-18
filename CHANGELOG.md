@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix Direct3D-S2 running out of VRAM inside ComfyUI on the 24 GB 3090 (the first in-ComfyUI run,
+  v26.10.18, peaked at 22 GiB allocated and failed in the 512-stage refiner). `ImageToMesh` now keeps
+  only the running stage's models on the GPU and parks the rest in CPU RAM, instead of holding all
+  three stages and both DINOv2 ViT-L copies for the whole job.
+
 - Fix Direct3D-S2 in the **`-3d`** image failing to load its weights ("Missing key(s) …conv.weight;
   Unexpected key(s) …conv.kernel"). The published checkpoints were saved with the torchsparse
   backend, and the nodes forced spconv. torchsparse (MIT, `385f5ce`) is now built in `d3d-build`

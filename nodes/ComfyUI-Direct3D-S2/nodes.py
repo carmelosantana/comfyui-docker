@@ -102,6 +102,70 @@ def place(pipeline, device):
         rembg.device = pipeline.device
 
 
+# Every model upstream's pipeline holds (Direct3DS2Pipeline.__init__, minus schedulers and dtype).
+PIPELINE_MODULES = ("dense_vae", "dense_dit", "sparse_vae_512", "sparse_dit_512", "sparse_vae_1024",
+                    "sparse_dit_1024", "refiner", "refiner_1024", "dense_image_encoder", "sparse_image_encoder")
+
+
+@contextlib.contextmanager
+def staged(pipeline, device):
+    """Keep only what is running on the GPU. Upstream holds every model (two DINOv2 ViT-L copies
+    included) for the whole job, and inside ComfyUI that ran a 24 GB card out of memory in the
+    512-stage refiner, the peak. Each upstream stage is one inference() call naming its vae, dit and
+    image encoder, and the sparse stages end in refiner.run(); during the refiner only it stays on.
+    BiRefNet is only used before the first stage, so it moves off then."""
+    rembg = getattr(pipeline, "birefnet_model", None)
+
+    def only(*keep):
+        keep = {id(m) for m in keep}
+        modules = [m for m in (getattr(pipeline, name, None) for name in PIPELINE_MODULES) if m is not None]
+        if getattr(rembg, "birefnet_model", None) is not None:
+            modules.append(rembg.birefnet_model)
+        for module in modules:  # off first, so the running models never share VRAM with the rest
+            if id(module) not in keep:
+                module.to("cpu")
+        for module in modules:
+            if id(module) in keep:
+                module.to(device)
+
+    real_inference = pipeline.inference
+
+    def inference(image, vae, dit, conditioner, *args, **kwargs):
+        only(vae, dit, conditioner)
+        return real_inference(image, vae, dit, conditioner, *args, **kwargs)
+
+    def refining(refiner):
+        real_run = refiner.run
+
+        def run(*args, **kwargs):
+            only(refiner)
+            return real_run(*args, **kwargs)
+
+        return run
+
+    refiners = [r for r in (getattr(pipeline, "refiner", None), getattr(pipeline, "refiner_1024", None))
+                if r is not None]
+    pipeline.inference = inference
+    for refiner in refiners:
+        refiner.run = refining(refiner)
+    try:
+        yield
+    finally:
+        del pipeline.inference
+        for refiner in refiners:
+            del refiner.run
+
+
+def target(pipeline, device):
+    """Point the pipeline at a device without moving its models (staged() moves them per stage).
+    BiRefNet, if attached, goes there now: upstream runs it before the first stage."""
+    pipeline.device = torch.device(device)
+    rembg = getattr(pipeline, "birefnet_model", None)
+    if getattr(rembg, "birefnet_model", None) is not None:
+        rembg.birefnet_model.to(device)
+        rembg.device = pipeline.device
+
+
 def to_pil(image, mask):
     """First image of a ComfyUI IMAGE batch -> PIL. A LoadImage MASK (1 = transparent) becomes the
     alpha channel, which tells the pipeline the background is already removed (skips BiRefNet).
@@ -210,11 +274,11 @@ class Direct3DS2ImageToMesh:
         # Make room: evict ComfyUI's cached models before taking ~21 GB.
         mm.unload_all_models()
         try:
-            place(pipeline, mm.get_torch_device())
+            target(pipeline, mm.get_torch_device())
             if pil.mode != "RGBA" and getattr(pipeline, "birefnet_model", None) is None:
                 attach_birefnet(pipeline)
             generator = torch.Generator(device=pipeline.device).manual_seed(seed)
-            with determinism(deterministic):
+            with determinism(deterministic), staged(pipeline, pipeline.device):
                 mesh = pipeline(
                     pil,
                     sdf_resolution=int(sdf_resolution),
