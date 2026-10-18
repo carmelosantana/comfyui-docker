@@ -257,9 +257,9 @@ class ImageToMeshTests(FakeMMTestCase):
 
     def test_unload_after_false_keeps_pipeline_on_device(self):
         pipe = FakePipeline()
-        self.mm.get_torch_device = lambda: "cuda:0"
         self.generate(pipe, unload_after=False)
-        self.assertEqual(pipe.moves, ["cuda:0"])
+        self.assertEqual(pipe.moves, ["cpu"])  # moved to the torch device once, never offloaded
+        self.assertNotIn("soft_empty_cache", self.mm.calls)
 
     def test_unloads_even_when_the_pipeline_fails(self):
         class Boom(FakePipeline):
@@ -267,10 +267,10 @@ class ImageToMeshTests(FakeMMTestCase):
                 raise RuntimeError("CUDA out of memory")
 
         pipe = Boom()
-        self.mm.get_torch_device = lambda: "cuda:0"
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(RuntimeError, "out of memory"):
             self.generate(pipe)
-        self.assertEqual(pipe.moves, ["cuda:0", "cpu"])
+        self.assertEqual(pipe.moves, ["cpu", "cpu"])
+        self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
 
 
 class LoaderTests(unittest.TestCase):

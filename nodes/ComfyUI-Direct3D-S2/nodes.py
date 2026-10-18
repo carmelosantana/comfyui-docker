@@ -1,6 +1,6 @@
 """Thin ComfyUI nodes over DreamTechAI/Direct3D-S2 (image -> mesh).
 
-The direct3d_s2 package, flash-attn, spconv and udf_ext are baked into the -3d image. They are
+The direct3d_s2 package, flash-attn, torchsparse and udf_ext are baked into the -3d image. They are
 imported lazily so the nodes still register on a --cpu boot, where CUDA cannot initialise.
 """
 
@@ -15,8 +15,10 @@ from PIL import Image
 
 import folder_paths
 
-# spconv ships prebuilt wheels; upstream's default (torchsparse) would need a source build.
-os.environ.setdefault("SPARSE_BACKEND", "spconv")
+# The published checkpoints were saved with torchsparse (keys "conv.kernel"); spconv names the same
+# weights "conv.weight" in a different layout and fails a strict load. Forced, not defaulted, so a
+# host-wide SPARSE_BACKEND cannot pick the wrong one.
+os.environ["SPARSE_BACKEND"] = "torchsparse"
 
 CATEGORY = "Direct3D-S2"
 WEIGHTS_REPO = "wushuang98/Direct3D-S2"
@@ -71,6 +73,35 @@ def attach_birefnet(pipeline):
     pipeline.birefnet_model = rembg
 
 
+@contextlib.contextmanager
+def determinism(enabled):
+    """Deterministic kernels for one run only, then restore ComfyUI's own settings. warn_only: an op
+    with no deterministic CUDA kernel warns instead of failing the job."""
+    if not enabled:
+        yield
+        return
+    saved = (torch.are_deterministic_algorithms_enabled(), torch.is_deterministic_algorithms_warn_only_enabled(),
+             torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark)
+    # cuBLAS reads this when its handle is created; a no-op if CUDA already started with another value.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = True, False
+    try:
+        yield
+    finally:
+        torch.use_deterministic_algorithms(saved[0], warn_only=saved[1])
+        torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = saved[2], saved[3]
+
+
+def place(pipeline, device):
+    """Move the pipeline and its attached BiRefNet, if any, to one device."""
+    pipeline.to(device)
+    rembg = getattr(pipeline, "birefnet_model", None)
+    if getattr(rembg, "birefnet_model", None) is not None:
+        rembg.birefnet_model.to(device)
+        rembg.device = pipeline.device
+
+
 def to_pil(image, mask):
     """First image of a ComfyUI IMAGE batch -> PIL. A LoadImage MASK (1 = transparent) becomes the
     alpha channel, which tells the pipeline the background is already removed (skips BiRefNet)."""
@@ -92,7 +123,6 @@ class Direct3DS2ModelLoader:
     CATEGORY = CATEGORY
 
     def load(self, version):
-        import comfy.model_management as mm
         from direct3d_s2.pipeline import Direct3DS2Pipeline
         from huggingface_hub import snapshot_download
 
@@ -103,7 +133,8 @@ class Direct3DS2ModelLoader:
         weights_dir = os.path.join(snapshot, version)
         with pinned_dinov2():
             pipeline = Direct3DS2Pipeline.from_pretrained(weights_dir)
-        pipeline.to(mm.get_torch_device())
+        # Held in CPU RAM; ImageToMesh moves it to the GPU only for the run.
+        pipeline.to("cpu")
         weights = {name: sha256_file(os.path.join(weights_dir, name)) for name in WEIGHT_FILES}
         dinov2 = os.path.join(torch.hub.get_dir(), "checkpoints", DINOV2_CHECKPOINT)
         if os.path.isfile(dinov2):
@@ -129,7 +160,23 @@ class Direct3DS2ImageToMesh:
                 "sdf_resolution": (["1024", "512"],),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
             },
-            "optional": {"mask": ("MASK",)},
+            # Optional so older API workflows keep validating; the defaults are upstream's __call__ ones.
+            "optional": {
+                "mask": ("MASK",),
+                "dense_steps": ("INT", {"default": 50, "min": 1, "max": 200}),
+                "dense_guidance": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 30.0, "step": 0.1}),
+                "sparse_512_steps": ("INT", {"default": 30, "min": 1, "max": 200}),
+                "sparse_512_guidance": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 30.0, "step": 0.1}),
+                "sparse_1024_steps": ("INT", {"default": 15, "min": 1, "max": 200}),
+                "sparse_1024_guidance": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 30.0, "step": 0.1}),
+                "mc_threshold": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.01}),
+                # Upstream applies this to the 1024 stage only (512 always removes the interior).
+                "remove_interior": ("BOOLEAN", {"default": True}),
+                # Same seed + deterministic kernels, for re-run checks. Slower; off by default.
+                "deterministic": ("BOOLEAN", {"default": False}),
+                # A 1024 run peaks near 21 GB; give the VRAM back to ComfyUI once the mesh is built.
+                "unload_after": ("BOOLEAN", {"default": True}),
+            },
         }
 
     RETURN_TYPES = ("D3DS2_MESH",)
@@ -137,27 +184,56 @@ class Direct3DS2ImageToMesh:
     FUNCTION = "generate"
     CATEGORY = CATEGORY
 
-    def generate(self, pipeline, image, sdf_resolution, seed, mask=None):
+    def generate(self, pipeline, image, sdf_resolution, seed, mask=None, dense_steps=50, dense_guidance=7.0,
+                 sparse_512_steps=30, sparse_512_guidance=7.0, sparse_1024_steps=15, sparse_1024_guidance=7.0,
+                 mc_threshold=0.2, remove_interior=True, deterministic=False, unload_after=True):
+        import comfy.model_management as mm
+
         pil = to_pil(image, mask)
         if pil.mode == "RGBA":
             background_removal = "none (RGBA input)"
         else:
-            if getattr(pipeline, "birefnet_model", None) is None:
-                attach_birefnet(pipeline)
             background_removal = f"{BIREFNET_REPO}@{BIREFNET_REF}"
-        generator = torch.Generator(device=getattr(pipeline, "device", "cpu")).manual_seed(seed)
-        mesh = pipeline(
-            pil,
-            sdf_resolution=int(sdf_resolution),
-            generator=generator,
-            # Upstream's remesh needs nvdiffrast (research-only) and GPL pymeshfix/igraph; the
-            # image ships none of them, so it stays off.
-            remesh=False,
-        )["mesh"]
+        sampler = {
+            "dense": {"steps": dense_steps, "guidance": dense_guidance},
+            "sparse_512": {"steps": sparse_512_steps, "guidance": sparse_512_guidance},
+            "sparse_1024": {"steps": sparse_1024_steps, "guidance": sparse_1024_guidance},
+            "mc_threshold": mc_threshold,
+            "remove_interior": remove_interior,
+        }
+        params = {stage: {"num_inference_steps": sampler[stage]["steps"], "guidance_scale": sampler[stage]["guidance"]}
+                  for stage in ("dense", "sparse_512", "sparse_1024")}
+        # Make room: evict ComfyUI's cached models before taking ~21 GB.
+        mm.unload_all_models()
+        place(pipeline, mm.get_torch_device())
+        try:
+            if pil.mode != "RGBA" and getattr(pipeline, "birefnet_model", None) is None:
+                attach_birefnet(pipeline)
+            generator = torch.Generator(device=pipeline.device).manual_seed(seed)
+            with determinism(deterministic):
+                mesh = pipeline(
+                    pil,
+                    sdf_resolution=int(sdf_resolution),
+                    dense_sampler_params=params["dense"],
+                    sparse_512_sampler_params=params["sparse_512"],
+                    sparse_1024_sampler_params=params["sparse_1024"],
+                    generator=generator,
+                    mc_threshold=mc_threshold,
+                    remove_interior=remove_interior,
+                    # Upstream's remesh needs nvdiffrast (research-only) and GPL pymeshfix/igraph; the
+                    # image ships none of them, so it stays off.
+                    remesh=False,
+                )["mesh"]
+        finally:
+            if unload_after:
+                place(pipeline, "cpu")
+                mm.soft_empty_cache()
         mesh.metadata["direct3d_s2"] = {
             **getattr(pipeline, "provenance", {}),
             "seed": seed,
             "sdf_resolution": int(sdf_resolution),
+            "sampler": sampler,
+            "deterministic": deterministic,
             "background_removal": background_removal,
             # Hash of the exact pixels the pipeline received (the source file is not visible here).
             "input": {"mode": pil.mode, "size": list(pil.size),
