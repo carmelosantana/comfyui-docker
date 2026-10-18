@@ -302,7 +302,8 @@ not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
   that lives in this repo ([`nodes/ComfyUI-Direct3D-S2`](nodes/ComfyUI-Direct3D-S2)). It does not
   use a third-party wrapper. Upstream code is pinned to `a1cf235`.
 - **Inputs:** wire `LoadImage`'s `IMAGE` *and* `MASK` to pass an RGBA image. The pipeline then
-  skips background removal. Without a mask it runs BiRefNet.
+  skips background removal. Without a mask it runs BiRefNet, and so it does when the image has no
+  alpha channel (LoadImage's 64x64 placeholder mask) or an alpha that is fully opaque.
 - **Licences:** only permissive code ships. Direct3D-S2 code and weights are MIT, flash-attn is
   BSD-3, and torchsparse is MIT (its unused `rootpath` import is dropped, so that package does not ship). The image encoder is DINOv2 (Apache-2.0) and background
   removal is BiRefNet (MIT). Both run remote code on first use, so both are pinned to fixed commits.
@@ -315,20 +316,24 @@ not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
 - **Weights:** `wushuang98/Direct3D-S2` (~4.2 GB for one version), DINOv2 ViT-L/14-reg (~1.2 GB),
   and BiRefNet if used. They download on the first loader run into `HF_HOME`/`TORCH_HOME` on the
   `models` mount. Nothing is baked.
-- **VRAM:** `sdf_resolution` 512 needs ~10 GB, 1024 peaks near 21 GB (a 3090 just fits). The loader
-  keeps the pipeline in CPU RAM. `ImageToMesh` evicts ComfyUI's cached models, moves the pipeline
-  to the GPU for the run, and with `unload_after` (default on) moves it back and frees the VRAM,
-  also when the run fails.
+- **VRAM:** `sdf_resolution` 512 needs ~10 GB; a 1024 run peaked near 21 GB in the sandboxed
+  reference run on the 3090. The loader keeps the pipeline in CPU RAM. `ImageToMesh` evicts
+  ComfyUI's cached models, moves the pipeline to the GPU for the run, and with `unload_after`
+  (default on) moves it back and frees the VRAM, also when the run fails. With `unload_after` off
+  the pipeline keeps ~20 GB that ComfyUI's own model manager cannot evict, so other workflows may
+  run out of VRAM until the next Direct3D-S2 run unloads it.
 - **Sampler settings** (optional inputs, upstream defaults): `dense_steps`/`dense_guidance` (50 /
   7.0), `sparse_512_steps`/`sparse_512_guidance` (30 / 7.0), `sparse_1024_steps`/`sparse_1024_guidance`
   (15 / 7.0), `mc_threshold` (0.2), `remove_interior` (true; upstream applies it to the 1024 stage).
 - **`deterministic`** (default off): turns on `torch.use_deterministic_algorithms` (warn-only),
   `cudnn.deterministic` and sets `cudnn.benchmark` off for that run only, then restores
-  ComfyUI's settings. Use it for a same-seed re-run check.
+  ComfyUI's settings. Custom CUDA kernels (torchsparse, flash-attn) are outside its reach, so it
+  reduces run-to-run drift but does not promise identical meshes: compare the hashes of a
+  same-seed re-run to find out.
 - **Provenance:** each saved mesh gets a `<file>.json` sidecar. It records the seed, resolution,
   weights version and sha256 of every weight file. It also holds the input's pixel sha256 (hash of
   the exact RGBA pixels passed in, not the source file), the sampler settings, the `deterministic`
-  flag and the mesh's own sha256.
+  flag, the sparse backend and the mesh's own sha256.
 - **Verified:** CI builds the image, runs the pack's unit tests, boots `--cpu` and checks the
   three nodes register. The checkpoint-compat test (`tests/test_direct3d_s2_nodes.py`) strict-loads
   every v1.1 checkpoint into its model under torchsparse when the weights are mounted
@@ -349,7 +354,9 @@ jq '{prompt: (.["1"].inputs.image = "my-rgba.png" | .["4"].inputs.filename_prefi
   --data @- http://comfyui:8188/prompt
 ```
 
-The first run downloads the weights (see above). A 1024 run takes about two minutes on the 3090.
+The shipped `example-rgba.png` name is a placeholder, so set `image` before posting. The first run
+downloads the weights (see above). A 1024 run took about 135 s in the sandboxed reference run on
+the 3090.
 
 ## Publishing (maintainer note)
 
