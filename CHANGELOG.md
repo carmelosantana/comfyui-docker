@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fix Direct3D-S2 in the **`-3d`** image failing to load its weights ("Missing key(s) …conv.weight;
+  Unexpected key(s) …conv.kernel"). The published checkpoints were saved with the torchsparse
+  backend, and the nodes forced spconv. torchsparse (MIT, `385f5ce`) is now built in `d3d-build`
+  with `FORCE_CUDA=1` and libsparsehash, a build guard fails if its CUDA kernels are missing, and
+  spconv is removed. A checkpoint-compat test strict-loads every v1.1 checkpoint (run it with the
+  weights mounted). `ImageToMesh` gains upstream's sampler settings, `mc_threshold`,
+  `remove_interior`, a run-scoped `deterministic` toggle and `unload_after` (default on: the
+  pipeline lives in CPU RAM and only holds VRAM during a run). All are recorded in the sidecar. An
+  example API workflow ships in `workflows/`. The image is no longer marked experimental.
 - Add an **experimental** (not deployed) **`-3d`** image (`--target mesh3d`; `latest-3d`, `YY.MM.DD-3d`, …) with
   [Direct3D-S2](https://github.com/DreamTechAI/Direct3D-S2) image-to-mesh. It is built from `base`
   (no sage, `USE_SAGE_ATTENTION=0`). flash-attn 2.8.3.post1 and `udf_ext` are compiled for sm_86
