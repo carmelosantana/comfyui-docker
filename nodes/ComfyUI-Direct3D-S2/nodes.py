@@ -102,6 +102,40 @@ def place(pipeline, device):
         rembg.device = pipeline.device
 
 
+# Every model upstream's pipeline holds, and the refiner each sparse stage runs after decoding.
+PIPELINE_MODULES = ("dense_vae", "dense_dit", "sparse_vae_512", "sparse_dit_512", "sparse_vae_1024",
+                    "sparse_dit_1024", "refiner", "refiner_1024", "dense_image_encoder", "sparse_image_encoder")
+STAGE_REFINER = {"sparse512": "refiner", "sparse1024": "refiner_1024"}
+
+
+@contextlib.contextmanager
+def staged(pipeline, device):
+    """Keep only the running stage's models on the GPU. Upstream holds all of them (two DINOv2 ViT-L
+    copies included) for the whole job, so the 512-stage refiner, the peak, ran out of a 24 GB card
+    inside ComfyUI. Each upstream stage is one inference() call naming its vae, dit and image encoder."""
+    real = pipeline.inference
+
+    def inference(image, vae, dit, conditioner, *args, **kwargs):
+        keep = {id(vae), id(dit), id(conditioner)}
+        refiner = getattr(pipeline, STAGE_REFINER.get(kwargs.get("mode", "dense"), ""), None)
+        if refiner is not None:
+            keep.add(id(refiner))
+        modules = [m for m in (getattr(pipeline, name, None) for name in PIPELINE_MODULES) if m is not None]
+        for module in modules:  # off first, so the stage's own models never share VRAM with the rest
+            if id(module) not in keep:
+                module.to("cpu")
+        for module in modules:
+            if id(module) in keep:
+                module.to(device)
+        return real(image, vae, dit, conditioner, *args, **kwargs)
+
+    pipeline.inference = inference
+    try:
+        yield
+    finally:
+        del pipeline.inference
+
+
 def to_pil(image, mask):
     """First image of a ComfyUI IMAGE batch -> PIL. A LoadImage MASK (1 = transparent) becomes the
     alpha channel, which tells the pipeline the background is already removed (skips BiRefNet).
@@ -214,7 +248,7 @@ class Direct3DS2ImageToMesh:
             if pil.mode != "RGBA" and getattr(pipeline, "birefnet_model", None) is None:
                 attach_birefnet(pipeline)
             generator = torch.Generator(device=pipeline.device).manual_seed(seed)
-            with determinism(deterministic):
+            with determinism(deterministic), staged(pipeline, pipeline.device):
                 mesh = pipeline(
                     pil,
                     sdf_resolution=int(sdf_resolution),

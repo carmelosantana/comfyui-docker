@@ -87,6 +87,9 @@ class FakePipeline:
         self.moves.append(str(device))
         self.device = device
 
+    def inference(self, *args, **kwargs):  # upstream's per-stage step; wrapped by nodes.staged
+        return [None]
+
     def __call__(self, image, **kwargs):
         self.calls.append((image, kwargs))
         self.seen_determinism = (torch.are_deterministic_algorithms_enabled(),
@@ -369,6 +372,80 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(prov["weights"]["config.yaml"], hashlib.sha256(b"config.yaml").hexdigest())
         self.assertEqual(set(prov["weights"]), set(nodes.WEIGHT_FILES))
         self.assertEqual(pipe.moves, ["cpu"])  # VRAM is only taken while a mesh is generated
+
+
+class FakeModule:
+    def __init__(self, name, log):
+        self.name, self.log, self.device = name, log, "cpu"
+
+    def to(self, device):
+        self.device = str(device)
+        return self
+
+
+class FakeStagedPipeline:
+    """Mimics upstream's __call__: one inference() call per stage, each naming its own modules."""
+
+    def __init__(self):
+        self.log = []
+        for name in nodes.PIPELINE_MODULES:
+            setattr(self, name, FakeModule(name, self.log))
+
+    def on(self, device):
+        return sorted(name for name in nodes.PIPELINE_MODULES if getattr(self, name).device == device)
+
+    def inference(self, image, vae, dit, conditioner, scheduler, mode="dense", **kwargs):
+        self.log.append((mode, self.on("gpu")))
+        if mode == "fail":
+            raise RuntimeError("CUDA out of memory")
+        return [mode]
+
+    def __call__(self, image, sdf_resolution=1024):
+        self.inference(image, self.dense_vae, self.dense_dit, self.dense_image_encoder, None, mode="dense")
+        self.inference(image, self.sparse_vae_512, self.sparse_dit_512, self.sparse_image_encoder, None,
+                       mode="sparse512", remove_interior=True)
+        if sdf_resolution == 1024:
+            self.inference(image, self.sparse_vae_1024, self.sparse_dit_1024, self.sparse_image_encoder, None,
+                           mode="sparse1024", remove_interior=True)
+
+
+class StageOffloadTests(unittest.TestCase):
+    def test_only_the_running_stage_is_on_the_gpu(self):
+        pipe = FakeStagedPipeline()
+        with nodes.staged(pipe, "gpu"):
+            pipe("img")
+        self.assertEqual(pipe.log, [
+            ("dense", ["dense_dit", "dense_image_encoder", "dense_vae"]),
+            ("sparse512", ["refiner", "sparse_dit_512", "sparse_image_encoder", "sparse_vae_512"]),
+            ("sparse1024", ["refiner_1024", "sparse_dit_1024", "sparse_image_encoder", "sparse_vae_1024"]),
+        ])
+
+    def test_restores_upstream_inference_even_on_failure(self):
+        pipe = FakeStagedPipeline()
+        with self.assertRaises(RuntimeError):
+            with nodes.staged(pipe, "gpu"):
+                pipe.inference("img", pipe.dense_vae, pipe.dense_dit, pipe.dense_image_encoder, None, mode="fail")
+        self.assertNotIn("inference", vars(pipe))  # the class method is back in charge
+
+    def test_generate_runs_the_pipeline_staged(self):
+        seen = {}
+
+        class Recording(FakePipeline):
+            def __call__(self, image, **kwargs):
+                seen["staged"] = "inference" in vars(self)
+                return super().__call__(image, **kwargs)
+
+        mm = FakeModelManagement()
+        saved = sys.modules.get("comfy.model_management")
+        sys.modules["comfy.model_management"] = mm
+        try:
+            nodes.Direct3DS2ImageToMesh().generate(Recording(), torch.ones(1, 4, 6, 3), "512", 1, mask=cutout_mask())
+        finally:
+            if saved is None:
+                sys.modules.pop("comfy.model_management", None)
+            else:
+                sys.modules["comfy.model_management"] = saved
+        self.assertTrue(seen["staged"])
 
 
 class ExampleWorkflowTests(unittest.TestCase):
