@@ -53,6 +53,20 @@ class FakeModelManagement(types.SimpleNamespace):
         self.calls.append("soft_empty_cache")
 
 
+def cutout_mask():
+    """A LoadImage MASK with a transparent corner (1 = transparent), as from a background-removed PNG."""
+    mask = torch.zeros(1, 4, 6)
+    mask[0, 0, 0] = 1.0
+    return mask
+
+
+class FakeRembg:
+    def __init__(self):
+        self.device = "cpu"
+        self.birefnet_model = types.SimpleNamespace(moves=[])
+        self.birefnet_model.to = lambda device: self.birefnet_model.moves.append(str(device))
+
+
 class FakeMesh:
     def __init__(self):
         self.metadata = {}
@@ -93,7 +107,7 @@ class FakeMMTestCase(unittest.TestCase):
             sys.modules["comfy.model_management"] = self._saved_mm
 
     def generate(self, pipe, **kwargs):
-        args = {"image": torch.ones(1, 4, 6, 3), "sdf_resolution": "512", "seed": 7, "mask": torch.zeros(1, 4, 6)}
+        args = {"image": torch.ones(1, 4, 6, 3), "sdf_resolution": "512", "seed": 7, "mask": cutout_mask()}
         args.update(kwargs)
         return nodes.Direct3DS2ImageToMesh().generate(pipe, **args)
 
@@ -120,6 +134,16 @@ class ToPilTests(unittest.TestCase):
         self.assertEqual(img.mode, "RGBA")
         self.assertEqual(img.getpixel((0, 0))[3], 0)
         self.assertEqual(img.getpixel((1, 0))[3], 255)
+
+    def test_loadimage_placeholder_mask_means_no_alpha(self):
+        # LoadImage returns a 64x64 zero mask for an image without an alpha channel.
+        img = nodes.to_pil(torch.ones(1, 4, 6, 3), torch.zeros(1, 64, 64))
+        self.assertEqual(img.mode, "RGB")
+
+    def test_fully_opaque_mask_means_no_alpha(self):
+        # Nothing was cut out, so the background still needs removing (BiRefNet).
+        img = nodes.to_pil(torch.ones(1, 4, 6, 3), torch.zeros(1, 4, 6))
+        self.assertEqual(img.mode, "RGB")
 
 
 class BackendTests(unittest.TestCase):
@@ -188,8 +212,7 @@ class ImageToMeshTests(FakeMMTestCase):
 
     def test_records_provenance_on_mesh(self):
         pipe = FakePipeline()
-        mask = torch.zeros(1, 4, 6)
-        (mesh,) = self.generate(pipe, sdf_resolution="1024", seed=42, mask=mask)
+        (mesh,) = self.generate(pipe, sdf_resolution="1024", seed=42)
         prov = mesh.metadata["direct3d_s2"]
         image = pipe.calls[0][0]
         self.assertEqual((prov["seed"], prov["sdf_resolution"]), (42, 1024))
@@ -215,6 +238,7 @@ class ImageToMeshTests(FakeMMTestCase):
             "remove_interior": True,
         })
         self.assertFalse(prov["deterministic"])
+        self.assertEqual(prov["sparse_backend"], "torchsparse")
 
     def test_sampler_settings_pass_through(self):
         pipe = FakePipeline()
@@ -260,6 +284,29 @@ class ImageToMeshTests(FakeMMTestCase):
         self.generate(pipe, unload_after=False)
         self.assertEqual(pipe.moves, ["cpu"])  # moved to the torch device once, never offloaded
         self.assertNotIn("soft_empty_cache", self.mm.calls)
+
+    def test_birefnet_follows_the_pipeline_on_and_off_the_gpu(self):
+        pipe = FakePipeline()
+        rembg = FakeRembg()
+        pipe.birefnet_model = rembg
+        (mesh,) = self.generate(pipe, mask=None)
+        self.assertEqual(rembg.birefnet_model.moves, ["cpu", "cpu"])
+        self.assertEqual(rembg.device, "cpu")
+        self.assertEqual(mesh.metadata["direct3d_s2"]["background_removal"],
+                         f"{nodes.BIREFNET_REPO}@{nodes.BIREFNET_REF}")
+
+    def test_unloads_when_the_move_to_the_gpu_fails(self):
+        class OomOnFirstMove(FakePipeline):
+            def to(self, device):
+                super().to(device)
+                if len(self.moves) == 1:
+                    raise RuntimeError("CUDA out of memory")
+
+        pipe = OomOnFirstMove()
+        with self.assertRaisesRegex(RuntimeError, "out of memory"):
+            self.generate(pipe)
+        self.assertEqual(pipe.moves, ["cpu", "cpu"])
+        self.assertEqual(self.mm.calls[-1], "soft_empty_cache")
 
     def test_unloads_even_when_the_pipeline_fails(self):
         class Boom(FakePipeline):

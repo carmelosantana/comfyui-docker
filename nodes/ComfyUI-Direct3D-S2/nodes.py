@@ -75,15 +75,15 @@ def attach_birefnet(pipeline):
 
 @contextlib.contextmanager
 def determinism(enabled):
-    """Deterministic kernels for one run only, then restore ComfyUI's own settings. warn_only: an op
-    with no deterministic CUDA kernel warns instead of failing the job."""
+    """Deterministic PyTorch/cuDNN kernels for one run only, then restore ComfyUI's own settings.
+    warn_only: an op with no deterministic kernel warns instead of failing the job. Custom kernels
+    (torchsparse, flash-attn) are not covered, so this reduces run-to-run drift but cannot promise
+    bit-identical meshes."""
     if not enabled:
         yield
         return
     saved = (torch.are_deterministic_algorithms_enabled(), torch.is_deterministic_algorithms_warn_only_enabled(),
              torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark)
-    # cuBLAS reads this when its handle is created; a no-op if CUDA already started with another value.
-    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.use_deterministic_algorithms(True, warn_only=True)
     torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = True, False
     try:
@@ -104,8 +104,12 @@ def place(pipeline, device):
 
 def to_pil(image, mask):
     """First image of a ComfyUI IMAGE batch -> PIL. A LoadImage MASK (1 = transparent) becomes the
-    alpha channel, which tells the pipeline the background is already removed (skips BiRefNet)."""
+    alpha channel, which tells the pipeline the background is already removed (skips BiRefNet).
+    LoadImage gives a 64x64 zero mask for an image without alpha, and a fully opaque alpha removes no
+    background either; both count as no mask, so BiRefNet runs."""
     rgb = (image[0].clamp(0, 1).cpu().numpy() * 255).round().astype(np.uint8)
+    if mask is not None and (tuple(mask.shape[-2:]) != rgb.shape[:2] or not bool(mask[0].any())):
+        mask = None
     if mask is None:
         return Image.fromarray(rgb, "RGB")
     alpha = ((1.0 - mask[0].clamp(0, 1)).cpu().numpy() * 255).round().astype(np.uint8)
@@ -205,8 +209,8 @@ class Direct3DS2ImageToMesh:
                   for stage in ("dense", "sparse_512", "sparse_1024")}
         # Make room: evict ComfyUI's cached models before taking ~21 GB.
         mm.unload_all_models()
-        place(pipeline, mm.get_torch_device())
         try:
+            place(pipeline, mm.get_torch_device())
             if pil.mode != "RGBA" and getattr(pipeline, "birefnet_model", None) is None:
                 attach_birefnet(pipeline)
             generator = torch.Generator(device=pipeline.device).manual_seed(seed)
@@ -234,6 +238,7 @@ class Direct3DS2ImageToMesh:
             "sdf_resolution": int(sdf_resolution),
             "sampler": sampler,
             "deterministic": deterministic,
+            "sparse_backend": "torchsparse",
             "background_removal": background_removal,
             # Hash of the exact pixels the pipeline received (the source file is not visible here).
             "input": {"mode": pil.mode, "size": list(pil.size),
