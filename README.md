@@ -344,6 +344,21 @@ not `sage`, and runs with `USE_SAGE_ATTENTION=0`.
   (`D3DS2_WEIGHTS`; see the file's docstring); CI has no weights, so it skips it there. GPU renders
   are not run in CI.
 
+### Known issue: 1024 jobs OOM on a 24 GB card inside ComfyUI
+
+As of v26.10.19 (2026-10-20), a 1024 run on the RTX 3090 still fails with CUDA OOM in the 512-stage
+refiner. Stage-wise offload cut peak *allocated* memory from 22,051 MiB to 15,937 MiB. But peak
+*reserved* stays at 23,744 MiB, the card's ceiling: about 8 GiB is lost to fragmentation in
+ComfyUI's default `cudaMallocAsync` allocator on the refiner's dense 512³ tensors. The sandboxed
+reference run used PyTorch's native caching allocator and fit at 21.05 GB. Next thing to try
+(untested): start ComfyUI with `--disable-cuda-malloc`, optionally with
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+
+**Upgrading:** the pack is seeded only when absent. Move `custom_nodes/ComfyUI-Direct3D-S2` aside
+(rename it to `ComfyUI-Direct3D-S2.disabled`) before restarting on a new image. Check with
+`grep -c 'def staged'` on both `/opt/comfyui-baked-nodes/…/nodes.py` and
+`/opt/comfyui/custom_nodes/…/nodes.py`: both should print 1.
+
 ### Example API workflow
 
 [`workflows/direct3d-s2-image-to-mesh.api.json`](workflows/direct3d-s2-image-to-mesh.api.json) is

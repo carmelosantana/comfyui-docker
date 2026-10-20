@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Known issue: Direct3D-S2 1024 jobs still OOM on the 24 GB 3090 inside ComfyUI. Peak allocated is
+  15,937 MiB after stage-wise offload, but reserved hits 23,744 MiB through `cudaMallocAsync`
+  fragmentation. `--disable-cuda-malloc` is untested. See the README's Direct3D-S2 section.
+
 - Fix Direct3D-S2 running out of VRAM inside ComfyUI on the 24 GB 3090 (the first in-ComfyUI run,
   v26.10.18, peaked at 22 GiB allocated and failed in the 512-stage refiner). `ImageToMesh` now keeps
   only the running stage's models on the GPU and parks the rest in CPU RAM, instead of holding all
